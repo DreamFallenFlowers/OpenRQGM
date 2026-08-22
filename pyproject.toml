@@ -3,7 +3,7 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "rqgm-reference"
+name = "openrqgm"
 version = "0.1.0"
 description = "Auditable reference implementation of the Red Queen Godel Machine"
 readme = "README.md"

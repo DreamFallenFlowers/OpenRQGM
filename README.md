@@ -1,6 +1,6 @@
-# RQGM Reference
+# OpenRQGM
 
-An auditable, framework-independent implementation of the core algorithm in
+An open, auditable, framework-independent implementation of the core algorithm in
 *The Red Queen Gödel Machine: Co-Evolving Agents and Their Evaluators*
 ([arXiv:2606.26294](https://arxiv.org/abs/2606.26294)).
 

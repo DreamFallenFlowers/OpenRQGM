@@ -1,12 +1,12 @@
 cff-version: 1.2.0
 message: "If you use this reference implementation, cite both this software and the RQGM paper."
-title: "RQGM Reference"
+title: "OpenRQGM"
 type: software
 version: 0.1.0
 date-released: 2026-08-22
 authors:
   - family-names: "DreamFallenFlowers"
-repository-code: "https://github.com/DreamFallenFlowers/rqgm-reference"
+repository-code: "https://github.com/DreamFallenFlowers/OpenRQGM"
 license: Apache-2.0
 preferred-citation:
   type: article
