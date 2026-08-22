@@ -1,0 +1,68 @@
+# Paper experiment reproduction status
+
+## Verdict
+
+OpenRQGM reproduces the published Algorithm 1 control flow, but it has **not
+reproduced the paper's headline empirical results**. The paper reports 119/166
+held-out Polyglot tasks for both its RQGM specialist and generalist endpoints.
+No result in this repository should currently be presented as a replication of
+that number.
+
+The closest public reconstruction is under `examples/paper_coding`. It uses the
+official public Aider Polyglot task repository and public CRAVE data, while
+keeping CRAVE test examples behind the private anchor interface.
+
+## What is exact, reconstructed, and approximate
+
+| Component | Status | Notes |
+|---|---|---|
+| Algorithm 1 search/control flow | Exact to published pseudocode | CMP, UCB-Air, binary budget, checkpoints, frozen evaluators, anchor replacement, and selective erasure are in the core package. |
+| Reported paper-scale settings | Recorded | `configs/paper_full.json` records 12,288 outcomes, GPT-5 low, alpha 0.6, epsilon 0.05, three training samples per node, the power-of-two checkpoint ratio, and the 10/49/166 split sizes. The first checkpoint is inherited from HGM and not specified in the RQGM paper. |
+| Polyglot task source | Public reconstruction | Official Aider repository pinned locally at commit `7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f`. The paper's exact task split is unpublished. |
+| CRAVE reviewer anchor | Public reconstruction | Deterministic withheld sample of the public CRAVE test split; exact paper sample is unpublished. |
+| Model and prompts | Approximation | Pilot uses authenticated `gpt-5.6-sol`; the paper used GPT-5 low and does not publish production prompts/provider revision. |
+| Execution harness | Approximation | Python-only Docker runner, not the paper's unpublished six-language production harness. |
+| Anchor inference | Approximation | Examples are classified in a batch per evaluator candidate to reduce model-call overhead. Binary outcomes are still recorded per example. |
+
+## Executed pilot
+
+Configuration: `examples/paper_coding/configs/pilot.json`.
+
+- two independent executions of the same fixed pilot configuration;
+- four validation outcomes per execution;
+- one checkpoint after outcome 2;
+- two archive nodes;
+- nine authenticated model calls in the final execution;
+- 141.313 seconds wall time in the final execution;
+- one generated `dominoes` solution passed all 13 tests in a network-disabled,
+  read-only, non-root Docker container;
+- endpoint validation record: 4 successes, 0 failures;
+- coder specialist: 2 successes, 0 failures;
+- reviewer specialist: 2 successes, 0 failures;
+- both reviewer artifacts scored 5/5 on the small CRAVE anchor;
+- the reviewer prompts were semantically identical, so the incumbent was kept;
+  no evaluator epoch transition or selective erasure occurred;
+- the saved state passes `skills/rqgm-reproduction/scripts/audit_run.py`.
+
+The 4/4 result is not a useful estimate of benchmark quality: the budget and
+task set are tiny, the same public benchmark may be present in model
+pretraining, and no held-out 166-task endpoint evaluation was run. Its value is
+integration evidence: real model calls, a real generated program, sandboxed
+tests, CRAVE-grounded reviewer validation, and a paper-aligned checkpoint all
+completed end to end.
+
+Local ignored artifacts are written to `runs/paper-coding-pilot`, with the
+first execution preserved at `runs/paper-coding-pilot-attempt1`.
+
+## What would be required for a defensible empirical replication
+
+1. Obtain the authors' exact 10/49/166 Polyglot split and 100-example CRAVE
+   anchor, or publish a preregistered replacement split under a new result name.
+2. Implement and pin all six language containers and the exact test commands.
+3. Match GPT-5 low, prompts, tool limits, timeout rules, and model-provider
+   revision as closely as the released information permits.
+4. Run all 12,288 binary validation outcomes for each headline condition and
+   multiple seeds, logging model tokens, cost, wall time, and failures.
+5. Evaluate frozen specialist/generalist endpoints on all 166 held-out tasks.
+6. Report the reconstruction separately from the paper's number and include
+   uncertainty and contamination limitations.

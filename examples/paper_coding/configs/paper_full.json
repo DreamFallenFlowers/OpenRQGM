@@ -1,0 +1,27 @@
+{
+  "claim": "paper-scale target manifest; not runnable as an exact reproduction without unpublished assets",
+  "model": "gpt-5-low",
+  "validation_budget": 12288,
+  "checkpoint_schedule": {
+    "ratio": 2,
+    "first_checkpoint": "not specified in the RQGM paper; inherited HGM setting required"
+  },
+  "epsilon": 0.05,
+  "expansion_alpha": 0.6,
+  "minimum_anchor_outcomes": 5,
+  "training_samples_per_node": 3,
+  "polyglot": {
+    "repository_commit_used_by_this_reconstruction": "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f",
+    "languages": ["cpp", "go", "java", "javascript", "python", "rust"],
+    "train": 10,
+    "validation": 49,
+    "test": 166,
+    "exact_paper_split_available": false
+  },
+  "crave_anchor_size": 100,
+  "reported_endpoint": {
+    "rqgm_specialist": "119/166",
+    "rqgm_generalist": "119/166",
+    "hgm_h": "116/166"
+  }
+}

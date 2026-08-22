@@ -1,0 +1,18 @@
+{
+  "claim": "public Python-only low-budget pilot",
+  "model": "gpt-5.6-sol",
+  "validation_budget": 4,
+  "checkpoints": [2],
+  "epsilon": 0.05,
+  "expansion_alpha": 0.6,
+  "minimum_anchor_outcomes": 5,
+  "training_samples_per_node": 1,
+  "random_seed": 260626294,
+  "polyglot_validation_tasks": 2,
+  "crave_validation_examples": 4,
+  "crave_anchor_examples": 5,
+  "model_timeout_seconds": 180,
+  "container_timeout_seconds": 30,
+  "output": "runs/paper-coding-pilot"
+}
+

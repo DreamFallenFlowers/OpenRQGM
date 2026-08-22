@@ -69,6 +69,10 @@ The toy run is deterministic and requires no model or network access. Its
 records while storing only anchor provider identity/version/fingerprint—not
 anchor data.
 
+For the current status of the paper's empirical reproduction and the runnable
+Polyglot/CRAVE pilot, see [Paper experiment reproduction status](docs/paper-experiment-status.md)
+and [`examples/paper_coding`](examples/paper_coding).
+
 ## Python API
 
 ```python
