@@ -3,9 +3,9 @@ name: rqgm-reproduction
 description: Scaffold, run, resume, or audit Red Queen Gödel Machine experiments against the public paper's Algorithm 1. Use for RQGM evaluator co-evolution, CMP/HGM archive search, checkpoint replacement, selective erasure, or paper-alignment checks; do not use for ordinary fixed-evaluator evolutionary search.
 ---
 
-# RQGM Reproduction
+# OpenRQGM Reproduction
 
-Use the repository's `rqgm` package as the single implementation. The skill
+Use OpenRQGM's `rqgm` package as the single implementation. The skill
 orchestrates experiment work; it must not duplicate or silently weaken the
 algorithm.
 

@@ -1,6 +1,6 @@
 interface:
-  display_name: "RQGM Reproduction"
-  short_description: "Build and audit paper-aligned RQGM experiments"
-  default_prompt: "Use $rqgm-reproduction to scaffold and audit an RQGM co-evolution experiment."
+  display_name: "OpenRQGM Reproduction"
+  short_description: "Build and audit paper-aligned OpenRQGM experiments"
+  default_prompt: "Use $rqgm-reproduction to scaffold and audit an OpenRQGM co-evolution experiment."
 policy:
   allow_implicit_invocation: true
