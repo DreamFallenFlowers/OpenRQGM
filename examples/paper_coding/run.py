@@ -452,8 +452,11 @@ class ChallengerSource:
         self, slot: EvaluatorSlot, archive: Sequence[WorkspaceNode]
     ) -> Sequence[EvaluatorCandidate]:
         candidates: dict[str, EvaluatorCandidate] = {}
+        incumbent_prompt = slot.incumbent.artifact["prompt"]
         for node in archive:
             prompt = node.workspace["reviewer_prompt"]
+            if prompt == incumbent_prompt:
+                continue
             digest = hashlib.sha256(prompt.encode()).hexdigest()[:16]
             candidate_id = f"reviewer-{digest}"
             candidates[candidate_id] = EvaluatorCandidate.create(
@@ -556,42 +559,83 @@ class TrainingFeedback:
 
     async def collect(self, node, tasks, evaluators, budget):  # type: ignore[no-untyped-def]
         del tasks, evaluators, budget
-        feedback = []
+        selected: list[tuple[str, dict[str, Any]]] = []
         for _ in range(self.samples_per_node):
             row = self.rows[self.index % len(self.rows)]
             example_id = f"train-{self.index % len(self.rows)}"
             self.index += 1
-            try:
-                result = await self.client.json(
-                    reviewer_prompt(
-                        node.workspace["reviewer_prompt"], review_example(example_id, row)
-                    ),
-                    LABEL_SCHEMA,
-                    f"crave-training:{example_id}",
-                )
-            except (
-                OSError,
-                RuntimeError,
-                subprocess.SubprocessError,
-                ValueError,
-                json.JSONDecodeError,
-            ) as error:
-                feedback.append(
+            selected.append((example_id, row))
+        prompt = f"""You are a code-review classifier. Follow this frozen policy:
+<policy>
+{node.workspace["reviewer_prompt"]}
+</policy>
+
+Classify every supplied pull request as APPROVE or REQUEST_CHANGES. Use only
+the supplied text. Do not browse, search, call tools, or use repository access.
+Do not omit or reorder ids.
+
+<examples>
+{json.dumps([review_example(example_id, row) for example_id, row in selected], ensure_ascii=False)}
+</examples>
+Return the required JSON only."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "predictions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "label": {
+                                "type": "string",
+                                "enum": ["APPROVE", "REQUEST_CHANGES"],
+                            },
+                        },
+                        "required": ["id", "label"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["predictions"],
+            "additionalProperties": False,
+        }
+        try:
+            result = await self.client.json(
+                prompt,
+                schema,
+                f"crave-training:{selected[0][0]}..{selected[-1][0]}",
+            )
+            predictions = {item["id"]: item["label"] for item in result["predictions"]}
+        except (
+            OSError,
+            RuntimeError,
+            subprocess.SubprocessError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            return {
+                "samples": [
                     {
                         "task": "reviewer-crave-training",
                         "example_id": example_id,
                         "error": type(error).__name__,
                         "enters_validation_utility": False,
                     }
-                )
-                continue
+                    for example_id, _ in selected
+                ],
+                "enters_validation_utility": False,
+            }
+        feedback = []
+        for example_id, row in selected:
+            prediction = predictions.get(example_id)
             feedback.append(
                 {
                     "task": "reviewer-crave-training",
                     "example_id": example_id,
-                    "prediction": result["label"],
+                    "prediction": prediction,
                     "expected": row["label"],
-                    "correct": result["label"] == row["label"],
+                    "correct": prediction == row["label"],
                 }
             )
         return {"samples": feedback, "enters_validation_utility": False}

@@ -35,6 +35,12 @@ Codex CLI.
   --config examples\paper_coding\configs\pilot.json
 ```
 
+The longer public reconstruction uses `configs/budget128.json`: 128 binary
+validation outcomes, checkpoints at 8/16/32/64, three batched training samples
+per node, 20 Python Polyglot validation tasks, 100 CRAVE validation examples,
+and a 20-example withheld CRAVE anchor. The 20-example anchor is a declared
+cost/context approximation, not the paper's 100-item test condition.
+
 Generated code is executed only in Docker with networking disabled, a
 read-only root filesystem, a memory cap, a PID cap, and a wall-clock timeout.
 The model is instructed not to browse or call tools, and runs in an empty
@@ -48,4 +54,3 @@ generalist RQGM endpoints. A result from `pilot.json` is a mechanics-and-domain
 integration pilot and must not be compared numerically with 119/166. A valid
 headline comparison requires all six languages, 12,288 binary validation
 outcomes per run, the authors' exact split/harness, and repeated runs.
-

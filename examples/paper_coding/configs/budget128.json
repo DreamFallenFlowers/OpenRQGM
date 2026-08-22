@@ -1,0 +1,18 @@
+{
+  "claim": "public Python-only 128-validation-outcome reconstruction",
+  "model": "gpt-5.6-sol",
+  "validation_budget": 128,
+  "checkpoints": [8, 16, 32, 64],
+  "epsilon": 0.05,
+  "expansion_alpha": 0.6,
+  "minimum_anchor_outcomes": 5,
+  "training_samples_per_node": 3,
+  "random_seed": 260626294,
+  "polyglot_validation_tasks": 20,
+  "crave_validation_examples": 100,
+  "crave_anchor_examples": 20,
+  "model_timeout_seconds": 300,
+  "container_timeout_seconds": 45,
+  "output": "runs/paper-coding-128"
+}
+
