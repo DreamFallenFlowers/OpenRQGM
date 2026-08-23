@@ -7,12 +7,15 @@
   "expansion_alpha": 0.6,
   "minimum_anchor_outcomes": 5,
   "training_samples_per_node": 1,
+  "coder_training_samples_per_node": 1,
+  "coder_repair_attempts": 2,
   "random_seed": 260626294,
-  "polyglot_validation_tasks": 2,
+  "polyglot_train_tasks": 4,
+  "polyglot_validation_tasks": 20,
+  "polyglot_test_tasks": 4,
   "crave_validation_examples": 4,
   "crave_anchor_examples": 5,
   "model_timeout_seconds": 180,
   "container_timeout_seconds": 30,
   "output": "runs/paper-coding-pilot"
 }
-

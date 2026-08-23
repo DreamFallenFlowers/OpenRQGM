@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import difflib
 import hashlib
 import json
 import os
@@ -196,10 +197,12 @@ class WorkspaceEditor:
     async def edit(self, parent, archive, budget):  # type: ignore[no-untyped-def]
         del budget
         feedback = parent.training_feedback[-3:]
-        prompt = f"""Improve a two-role coding workspace by making one bounded prompt edit.
+        prompt = f"""Improve a two-role coding workspace by making one bounded strategy edit.
 The coder solves Python Exercism tasks. The reviewer predicts whether a patch
 should pass review. Training feedback may be used; validation and anchor labels
-are unavailable. Do not browse, call tools, or name benchmark answers.
+are unavailable. Coder training feedback contains sandbox test outcomes and may
+be used to improve the generation or repair policy. Do not browse, call tools,
+or name benchmark answers.
 
 Current workspace:
 {json.dumps(parent.workspace, ensure_ascii=False)}
@@ -214,8 +217,9 @@ Return complete replacement prompts as JSON."""
             "properties": {
                 "coder_prompt": {"type": "string"},
                 "reviewer_prompt": {"type": "string"},
+                "repair_prompt": {"type": "string"},
             },
-            "required": ["coder_prompt", "reviewer_prompt"],
+            "required": ["coder_prompt", "reviewer_prompt", "repair_prompt"],
             "additionalProperties": False,
         }
         try:
@@ -298,8 +302,8 @@ class DockerPythonRunner:
                 )
                 metadata = {
                     "returncode": completed.returncode,
-                    "stdout_tail": completed.stdout[-500:],
-                    "stderr_tail": completed.stderr[-500:],
+                    "stdout_tail": completed.stdout[-4000:],
+                    "stderr_tail": completed.stderr[-8000:],
                 }
                 return int(completed.returncode == 0), metadata
             except subprocess.TimeoutExpired:
@@ -314,52 +318,272 @@ class CodingTaskEvaluator:
     runner: DockerPythonRunner
     validation_tasks: list[Path]
     crave_validation: list[dict[str, Any]]
-    rng: random.Random
-    artifacts: dict[str, dict[str, Any]] = field(default_factory=dict)
-    review_index: int = 0
+    random_seed: int
+    repair_attempts: int = 1
 
-    async def _coder_artifact(self, node: WorkspaceNode) -> dict[str, Any]:
-        if node.node_id in self.artifacts:
-            return self.artifacts[node.node_id]
-        task = self.validation_tasks[self.rng.randrange(len(self.validation_tasks))]
+    def _task_material(self, task: Path) -> dict[str, str]:
         source_path = self.runner.source_file(task)
         instructions = next((task / ".docs").glob("instruction*.md"), None)
         task_text = instructions.read_text(encoding="utf-8") if instructions else task.name
         starter = source_path.read_text(encoding="utf-8")
+        test_files = sorted(
+            path
+            for path in task.glob("*.py")
+            if path.name.endswith("_test.py") or path.name.startswith("test_")
+        )
+        tests = "\n\n".join(
+            f"# file: {path.name}\n{path.read_text(encoding='utf-8')}" for path in test_files
+        )
+        return {
+            "task": task.name,
+            "task_path": str(task),
+            "source_file": source_path.name,
+            "instructions": task_text,
+            "starter": starter,
+            "tests": tests,
+        }
+
+    def _ordered_tasks(self, node_id: str, tasks: Sequence[Path], phase: str) -> list[Path]:
+        return sorted(
+            tasks,
+            key=lambda task: hashlib.sha256(
+                f"{self.random_seed}:{phase}:{node_id}:{task.name}".encode()
+            ).digest(),
+        )
+
+    async def _generate_artifact(
+        self,
+        node: WorkspaceNode,
+        task: Path,
+        *,
+        phase: str,
+        purpose_prefix: str,
+    ) -> dict[str, Any]:
+        material = self._task_material(task)
         prompt = f"""Act as a coding task solver under this frozen policy:
 {node.workspace["coder_prompt"]}
 
-Solve the task using only the supplied instructions and starter file. Do not
-browse, search, call tools, or read external files. Return the complete Python
-source file, not a diff.
+Solve the task using only the supplied instructions and starter file. Return
+the complete Python source file, not a diff. A sandboxed test runner will return
+concrete feedback and you may receive a bounded repair turn. Do not browse or
+search the web.
 
 <instructions>
-{task_text}
+{material["instructions"]}
 </instructions>
-<starter filename={source_path.name!r}>
-{starter}
-</starter>"""
+<starter filename={material["source_file"]!r}>
+{material["starter"]}
+</starter>
+<repository_tests>
+{material["tests"]}
+</repository_tests>"""
         schema = {
             "type": "object",
             "properties": {"replacement": {"type": "string"}},
             "required": ["replacement"],
             "additionalProperties": False,
         }
-        result = await self.client.json(prompt, schema, f"coder:{task.name}")
+        result = await self.client.json(prompt, schema, f"{purpose_prefix}:{task.name}:attempt-0")
+        replacement = result["replacement"]
+        outcome, sandbox = await asyncio.to_thread(self.runner.run, task, replacement)
+        attempts = 1
+        for repair_index in range(self.repair_attempts):
+            if outcome:
+                break
+            repair_policy = node.workspace.get(
+                "repair_prompt",
+                "Use the concrete test failure to repair the implementation without changing "
+                "the API.",
+            )
+            repair_prompt = f"""Repair a Python solution under this frozen policy:
+{repair_policy}
+
+Use only the task, starter, current implementation, and sandbox output below.
+Do not browse or search the web. Return the complete corrected source file.
+
+<instructions>
+{material["instructions"]}
+</instructions>
+<starter filename={material["source_file"]!r}>
+{material["starter"]}
+</starter>
+<repository_tests>
+{material["tests"]}
+</repository_tests>
+<current>
+{replacement}
+</current>
+<sandbox_result>
+{json.dumps(sandbox, ensure_ascii=False)}
+</sandbox_result>"""
+            repaired = await self.client.json(
+                repair_prompt,
+                schema,
+                f"{purpose_prefix}:{task.name}:repair-{repair_index + 1}",
+            )
+            replacement = repaired["replacement"]
+            outcome, sandbox = await asyncio.to_thread(self.runner.run, task, replacement)
+            attempts += 1
+        patch = "".join(
+            difflib.unified_diff(
+                material["starter"].splitlines(keepends=True),
+                replacement.splitlines(keepends=True),
+                fromfile=f"a/{material['source_file']}",
+                tofile=f"b/{material['source_file']}",
+            )
+        )
         artifact = {
-            "task": task.name,
-            "task_path": str(task),
-            "source_file": source_path.name,
-            "replacement": result["replacement"],
+            "kind": "polyglot-solution",
+            "phase": phase,
+            **material,
+            "replacement": replacement,
+            "patch": patch,
+            "test_outcome": outcome,
+            "sandbox": sandbox,
+            "attempts": attempts,
+            "fixed_recorded": False,
+            "reviews": {},
         }
-        self.artifacts[node.node_id] = artifact
         return artifact
+
+    def _cached_code_artifacts(self, node: WorkspaceNode) -> list[tuple[str, dict[str, Any]]]:
+        return sorted(
+            (
+                (key, value)
+                for key, value in node.cached_artifacts.items()
+                if isinstance(value, dict)
+                and value.get("kind") == "polyglot-solution"
+                and value.get("phase") == "validation"
+            ),
+            key=lambda pair: pair[0],
+        )
+
+    async def _artifact_for_dimension(
+        self,
+        node: WorkspaceNode,
+        dimension: str,
+        evaluator_id: str | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        artifacts = self._cached_code_artifacts(node)
+        for key, artifact in artifacts:
+            if dimension == "fixed" and not artifact.get("fixed_recorded", False):
+                return key, artifact
+            if dimension == "learned" and evaluator_id not in artifact.get("reviews", {}):
+                return key, artifact
+
+        used = {artifact["task"] for _, artifact in artifacts}
+        task = next(
+            (
+                candidate
+                for candidate in self._ordered_tasks(
+                    node.node_id, self.validation_tasks, "validation"
+                )
+                if candidate.name not in used
+            ),
+            None,
+        )
+        if task is None:
+            raise RuntimeError(f"validation task pool exhausted for node {node.node_id}")
+        artifact = await self._generate_artifact(
+            node,
+            task,
+            phase="validation",
+            purpose_prefix="coder-validation",
+        )
+        return f"polyglot:validation:{task.name}", artifact
+
+    def _next_crave_example(self, node: WorkspaceNode) -> tuple[str, dict[str, Any]]:
+        used = {
+            value["example_id"]
+            for value in node.cached_artifacts.values()
+            if isinstance(value, dict) and value.get("kind") == "crave-validation"
+        }
+        ordered = sorted(
+            enumerate(self.crave_validation),
+            key=lambda pair: hashlib.sha256(
+                f"{self.random_seed}:crave:{node.node_id}:{pair[0]}".encode()
+            ).digest(),
+        )
+        selected = next(
+            ((index, row) for index, row in ordered if f"validation-{index}" not in used),
+            None,
+        )
+        if selected is None:
+            raise RuntimeError(f"CRAVE validation pool exhausted for node {node.node_id}")
+        index, row = selected
+        return f"validation-{index}", row
+
+    async def training_samples(
+        self,
+        node: WorkspaceNode,
+        tasks: Sequence[Path],
+        count: int,
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        ordered = self._ordered_tasks(node.node_id, tasks, "training")
+        for task in ordered[:count]:
+            try:
+                artifact = await self._generate_artifact(
+                    node,
+                    task,
+                    phase="training",
+                    purpose_prefix="coder-training",
+                )
+                results.append(
+                    {
+                        "task": task.name,
+                        "outcome": artifact["test_outcome"],
+                        "attempts": artifact["attempts"],
+                        "sandbox": artifact["sandbox"],
+                    }
+                )
+            except (
+                OSError,
+                RuntimeError,
+                subprocess.SubprocessError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as error:
+                results.append({"task": task.name, "outcome": 0, "error": type(error).__name__})
+        return results
+
+    async def heldout_results(
+        self,
+        node: WorkspaceNode,
+        tasks: Sequence[Path],
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for task in tasks:
+            try:
+                artifact = await self._generate_artifact(
+                    node,
+                    task,
+                    phase="heldout",
+                    purpose_prefix="coder-heldout",
+                )
+                results.append(
+                    {
+                        "task": task.name,
+                        "outcome": artifact["test_outcome"],
+                        "attempts": artifact["attempts"],
+                        "sandbox": artifact["sandbox"],
+                    }
+                )
+            except (
+                OSError,
+                RuntimeError,
+                subprocess.SubprocessError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as error:
+                results.append({"task": task.name, "outcome": 0, "error": type(error).__name__})
+        return results
 
     async def evaluate(self, node, task, evaluator, cached_artifact, budget):  # type: ignore[no-untyped-def]
         del cached_artifact, budget
         if task.task_id == "coder-polyglot-tests":
             try:
-                artifact = await self._coder_artifact(node)
+                artifact_key, artifact = await self._artifact_for_dimension(node, "fixed")
             except (
                 OSError,
                 RuntimeError,
@@ -368,20 +592,25 @@ source file, not a diff.
                 json.JSONDecodeError,
             ) as error:
                 return EvaluationOutcome(0, metadata={"error": type(error).__name__})
-            outcome, details = await asyncio.to_thread(
-                self.runner.run, Path(artifact["task_path"]), artifact["replacement"]
-            )
+            artifact["fixed_recorded"] = True
             return EvaluationOutcome(
-                outcome,
-                artifact_key=f"coder:{node.node_id}",
+                artifact["test_outcome"],
+                artifact_key=artifact_key,
                 artifact=artifact,
-                metadata={"task": artifact["task"], "sandbox": details},
+                metadata={
+                    "sample_id": artifact["task"],
+                    "task": artifact["task"],
+                    "sandbox": artifact["sandbox"],
+                    "attempts": artifact["attempts"],
+                },
             )
         if task.task_id == "coder-learned-review":
             if evaluator is None:
                 raise RuntimeError("learned reviewer task has no frozen evaluator")
             try:
-                artifact = await self._coder_artifact(node)
+                artifact_key, artifact = await self._artifact_for_dimension(
+                    node, "learned", evaluator.candidate_id
+                )
             except (
                 OSError,
                 RuntimeError,
@@ -393,9 +622,11 @@ source file, not a diff.
             example = {
                 "id": artifact["task"],
                 "title": f"Implement {artifact['task']}",
-                "patch": artifact["replacement"],
-                "description": "Candidate solution for the supplied programming task.",
-                "hint": "Approve only if the code appears correct, complete, and robust.",
+                "instructions": artifact["instructions"],
+                "starter": artifact["starter"],
+                "tests": artifact["tests"],
+                "patch": artifact["patch"],
+                "description": "Judge this patch against the complete task specification.",
             }
             try:
                 result = await self.client.json(
@@ -411,17 +642,20 @@ source file, not a diff.
                 json.JSONDecodeError,
             ) as error:
                 return EvaluationOutcome(0, metadata={"error": type(error).__name__})
+            artifact.setdefault("reviews", {})[evaluator.candidate_id] = result["label"]
             return EvaluationOutcome(
                 int(result["label"] == "APPROVE"),
-                artifact_key=f"coder:{node.node_id}",
+                artifact_key=artifact_key,
                 artifact=artifact,
-                metadata={"task": artifact["task"], "review_label": result["label"]},
+                metadata={
+                    "sample_id": artifact["task"],
+                    "task": artifact["task"],
+                    "review_label": result["label"],
+                },
             )
         if task.task_id == "reviewer-crave-validation":
-            row = self.crave_validation[self.review_index % len(self.crave_validation)]
-            example_id = f"validation-{self.review_index % len(self.crave_validation)}"
-            self.review_index += 1
             try:
+                example_id, row = self._next_crave_example(node)
                 result = await self.client.json(
                     reviewer_prompt(
                         node.workspace["reviewer_prompt"], review_example(example_id, row)
@@ -441,7 +675,13 @@ source file, not a diff.
                 )
             return EvaluationOutcome(
                 int(result["label"] == row["label"]),
-                metadata={"example_id": example_id, "prediction": result["label"]},
+                artifact_key=f"crave:{example_id}",
+                artifact={
+                    "kind": "crave-validation",
+                    "example_id": example_id,
+                    "prediction": result["label"],
+                },
+                metadata={"sample_id": example_id, "prediction": result["label"]},
             )
         raise KeyError(task.task_id)
 
@@ -554,13 +794,16 @@ Return the required JSON only."""
 class TrainingFeedback:
     client: CodexCli
     rows: list[dict[str, Any]]
-    samples_per_node: int
+    reviewer_samples_per_node: int
+    coding_evaluator: CodingTaskEvaluator
+    coder_tasks: list[Path]
+    coder_samples_per_node: int
     index: int = 0
 
     async def collect(self, node, tasks, evaluators, budget):  # type: ignore[no-untyped-def]
         del tasks, evaluators, budget
         selected: list[tuple[str, dict[str, Any]]] = []
-        for _ in range(self.samples_per_node):
+        for _ in range(self.reviewer_samples_per_node):
             row = self.rows[self.index % len(self.rows)]
             example_id = f"train-{self.index % len(self.rows)}"
             self.index += 1
@@ -600,51 +843,68 @@ Return the required JSON only."""
             "required": ["predictions"],
             "additionalProperties": False,
         }
-        try:
-            result = await self.client.json(
-                prompt,
-                schema,
-                f"crave-training:{selected[0][0]}..{selected[-1][0]}",
-            )
-            predictions = {item["id"]: item["label"] for item in result["predictions"]}
-        except (
-            OSError,
-            RuntimeError,
-            subprocess.SubprocessError,
-            ValueError,
-            json.JSONDecodeError,
-        ) as error:
-            return {
-                "samples": [
+        reviewer_feedback: list[dict[str, Any]] = []
+        if selected:
+            try:
+                result = await self.client.json(
+                    prompt,
+                    schema,
+                    f"crave-training:{selected[0][0]}..{selected[-1][0]}",
+                )
+                predictions = {item["id"]: item["label"] for item in result["predictions"]}
+                for example_id, row in selected:
+                    prediction = predictions.get(example_id)
+                    reviewer_feedback.append(
+                        {
+                            "task": "reviewer-crave-training",
+                            "example_id": example_id,
+                            "prediction": prediction,
+                            "expected": row["label"],
+                            "correct": prediction == row["label"],
+                        }
+                    )
+            except (
+                OSError,
+                RuntimeError,
+                subprocess.SubprocessError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as error:
+                reviewer_feedback = [
                     {
                         "task": "reviewer-crave-training",
                         "example_id": example_id,
                         "error": type(error).__name__,
-                        "enters_validation_utility": False,
                     }
                     for example_id, _ in selected
-                ],
-                "enters_validation_utility": False,
-            }
-        feedback = []
-        for example_id, row in selected:
-            prediction = predictions.get(example_id)
-            feedback.append(
-                {
-                    "task": "reviewer-crave-training",
-                    "example_id": example_id,
-                    "prediction": prediction,
-                    "expected": row["label"],
-                    "correct": prediction == row["label"],
-                }
-            )
-        return {"samples": feedback, "enters_validation_utility": False}
+                ]
+        coder_feedback = await self.coding_evaluator.training_samples(
+            node,
+            self.coder_tasks,
+            self.coder_samples_per_node,
+        )
+        return {
+            "reviewer_samples": reviewer_feedback,
+            "coder_samples": coder_feedback,
+            "enters_validation_utility": False,
+        }
 
 
-def build_engine(config: dict[str, Any], client: CodexCli) -> tuple[RQGM, CodingTaskEvaluator]:
+def build_engine(
+    config: dict[str, Any], client: CodexCli
+) -> tuple[RQGM, CodingTaskEvaluator, list[Path]]:
     seed = int(config["random_seed"])
     tasks = python_tasks(seed)
-    validation_tasks = tasks[: int(config["polyglot_validation_tasks"])]
+    train_count = int(config["polyglot_train_tasks"])
+    validation_count = int(config["polyglot_validation_tasks"])
+    test_count = int(config["polyglot_test_tasks"])
+    if train_count + validation_count + test_count > len(tasks):
+        raise ValueError("requested Polyglot train/validation/test splits overlap")
+    coder_train_tasks = tasks[:train_count]
+    validation_tasks = tasks[train_count : train_count + validation_count]
+    heldout_tasks = tasks[
+        train_count + validation_count : train_count + validation_count + test_count
+    ]
     crave_train = sample_rows(load_rows("train"), 32, seed + 1)
     crave_validation = sample_rows(
         load_rows("validation"), int(config["crave_validation_examples"]), seed + 2
@@ -656,7 +916,8 @@ def build_engine(config: dict[str, Any], client: CodexCli) -> tuple[RQGM, Coding
         DockerPythonRunner(int(config["container_timeout_seconds"])),
         validation_tasks,
         crave_validation,
-        random.Random(seed + 4),
+        seed + 4,
+        int(config["coder_repair_attempts"]),
     )
     initial_reviewer = (
         "Approve only when the patch is correct, complete, scoped to the request, and has no "
@@ -676,6 +937,10 @@ def build_engine(config: dict[str, Any], client: CodexCli) -> tuple[RQGM, Coding
                 "hacks."
             ),
             "reviewer_prompt": initial_reviewer,
+            "repair_prompt": (
+                "Use the concrete sandbox failure to correct the algorithm while preserving the "
+                "required public API. Make the smallest complete fix and avoid test-specific hacks."
+            ),
         },
         tasks=[
             RoleTask("coder", "coder-polyglot-tests", "fixed"),
@@ -690,7 +955,12 @@ def build_engine(config: dict[str, Any], client: CodexCli) -> tuple[RQGM, Coding
             anchor_provider=provider,
             anchor_evaluator=BatchedAnchorEvaluator(client, provider),
             training_feedback=TrainingFeedback(
-                client, crave_train, int(config["training_samples_per_node"])
+                client,
+                crave_train,
+                int(config["training_samples_per_node"]),
+                task_evaluator,
+                coder_train_tasks,
+                int(config["coder_training_samples_per_node"]),
             ),
         ),
         config=RQGMConfig(
@@ -702,7 +972,7 @@ def build_engine(config: dict[str, Any], client: CodexCli) -> tuple[RQGM, Coding
             random_seed=seed,
         ),
     )
-    return engine, task_evaluator
+    return engine, task_evaluator, heldout_tasks
 
 
 async def execute(config_path: Path) -> None:
@@ -710,9 +980,26 @@ async def execute(config_path: Path) -> None:
     output = ROOT / config["output"]
     output.mkdir(parents=True, exist_ok=True)
     client = CodexCli(config["model"], int(config["model_timeout_seconds"]), DATA / "codex-empty")
-    engine, _ = build_engine(config, client)
+    engine, task_evaluator, heldout_tasks = build_engine(config, client)
     started = time.monotonic()
     result = await engine.run()
+    endpoint_ids = {
+        "generalist": result.endpoint.node_id,
+        "coder_specialist": result.specialists["coder"].node_id,
+    }
+    heldout: dict[str, Any] = {}
+    heldout_by_node: dict[str, list[dict[str, Any]]] = {}
+    for endpoint_name, node_id in endpoint_ids.items():
+        node = engine.archive.nodes[node_id]
+        if node_id not in heldout_by_node:
+            heldout_by_node[node_id] = await task_evaluator.heldout_results(node, heldout_tasks)
+        outcomes = heldout_by_node[node_id]
+        heldout[endpoint_name] = {
+            "node_id": node_id,
+            "passes": sum(item["outcome"] for item in outcomes),
+            "total": len(outcomes),
+            "outcomes": outcomes,
+        }
     summary = {
         "claim": config["claim"],
         "result": asdict(result),
@@ -722,6 +1009,7 @@ async def execute(config_path: Path) -> None:
             "fingerprint": engine.runtime.anchor_provider.fingerprint,
         },
         "model_calls": client.calls,
+        "heldout": heldout,
         "paper_comparison_valid": False,
         "paper_reported_rqgm_endpoint": "119/166",
         "wall_time_seconds": round(time.monotonic() - started, 3),
@@ -730,7 +1018,8 @@ async def execute(config_path: Path) -> None:
             "paper split and production prompts are unpublished",
             "gpt-5.6-sol differs from the paper's GPT-5 low endpoint",
             "anchor inference is batched as a declared cost-saving approximation",
-            "training feedback currently grounds the reviewer role only",
+            "structured prompt/repair strategy evolution is narrower than arbitrary codebase edits",
+            "only the public Python subset is implemented",
         ],
     }
     (output / "summary.json").write_text(

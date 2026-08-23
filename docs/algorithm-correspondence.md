@@ -30,8 +30,10 @@ the acceptance checklist for claims of paper alignment.
 - **Stationarity:** evaluator artifacts, artifact protocol and binary rule must
   remain fixed between checkpoints. Runtime adapters are responsible for model
   version and prompt hashing when external services are used.
-- **Lazy recovery:** cached task artifacts remain on nodes after erasure. The
-  least-measured scheduler naturally repopulates missing current-epoch cells.
+- **Lazy recovery:** cached task artifacts remain on nodes after erasure and
+  are keyed by their declared sample-level `artifact_key`. The least-measured
+  scheduler naturally repopulates missing current-epoch cells without treating
+  one deterministic artifact as multiple independent benchmark samples.
 - **Comparable scores:** learned task-agent utilities are epoch-local. Only
   fixed-anchor outcomes can be compared globally across evaluator transitions.
 

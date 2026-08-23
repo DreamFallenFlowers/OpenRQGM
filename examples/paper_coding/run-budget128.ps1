@@ -5,9 +5,9 @@ $python = Join-Path $root ".venv\Scripts\python.exe"
 $runner = Join-Path $PSScriptRoot "run.py"
 $config = Join-Path $PSScriptRoot "configs\budget128.json"
 $runs = Join-Path $root "runs"
-$stdout = Join-Path $runs "paper-coding-128-console.log"
-$stderr = Join-Path $runs "paper-coding-128-error.log"
-$processFile = Join-Path $runs "paper-coding-128-process.json"
+$stdout = Join-Path $runs "paper-coding-128-v2-console.log"
+$stderr = Join-Path $runs "paper-coding-128-v2-error.log"
+$processFile = Join-Path $runs "paper-coding-128-v2-process.json"
 
 if (-not (Test-Path -LiteralPath $python)) {
     throw "OpenRQGM virtual environment is missing: $python"
@@ -39,4 +39,3 @@ $process = Start-Process `
 
 Write-Output "Started OpenRQGM 128-outcome run: PID $($process.Id)"
 Write-Output "Progress log: $stdout"
-

@@ -159,6 +159,22 @@ async def test_runtime_cannot_mutate_frozen_incumbent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_engine_caches_by_sample_artifact_key() -> None:
+    engine, _ = build_engine()
+    engine.config = RQGMConfig(validation_budget=1, checkpoint_start=32, random_seed=2)
+
+    @dataclass
+    class SampleEvaluator:
+        async def evaluate(self, node, task, evaluator, cached_artifact, budget):  # type: ignore[no-untyped-def]
+            del node, task, evaluator, cached_artifact, budget
+            return EvaluationOutcome(1, artifact_key="sample:item-1", artifact={"value": 1})
+
+    engine.runtime.task_evaluator = SampleEvaluator()
+    await engine.run()
+    assert engine.archive.nodes["seed"].cached_artifacts == {"sample:item-1": {"value": 1}}
+
+
+@pytest.mark.asyncio
 async def test_multi_slot_replacements_are_planned_from_old_epoch_vector() -> None:
     incumbents = [
         EvaluatorCandidate.create(

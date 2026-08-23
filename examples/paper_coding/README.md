@@ -37,9 +37,37 @@ Codex CLI.
 
 The longer public reconstruction uses `configs/budget128.json`: 128 binary
 validation outcomes, checkpoints at 8/16/32/64, three batched training samples
-per node, 20 Python Polyglot validation tasks, 100 CRAVE validation examples,
-and a 20-example withheld CRAVE anchor. The 20-example anchor is a declared
-cost/context approximation, not the paper's 100-item test condition.
+per node, one coder training task per node, disjoint Python Polyglot
+train/validation/test splits, 100 CRAVE validation examples, and a 20-example
+withheld CRAVE anchor. The 20-example anchor is a declared cost/context
+approximation, not the paper's 100-item test condition.
+
+## Sample-aware protocol (v2)
+
+Each workspace node is a reusable agent strategy, not a solution to one fixed
+exercise. Every ordinary coder validation consumes a previously unseen
+Polyglot sample for that node. The executable-test cell and learned-reviewer
+cell share the same sample-level patch; after evaluator replacement, the patch
+is reused and reviewed under the new frozen evaluator. It is never counted
+twice as fresh fixed evidence. CRAVE validation examples likewise do not repeat
+within a node before its pool is exhausted.
+
+The coder receives the public repository tests as task-agent context and up to
+two bounded sandbox-feedback repair turns by default, approximating the
+paper's bash/editor loop without exposing validation items to the meta-agent.
+Lineage-only training contains both CRAVE reviewer feedback and coder test
+outcomes, while validation labels remain hidden from the workspace editor.
+Final generalist and coder-specialist endpoints are evaluated separately on the
+disjoint configured Polyglot test split.
+
+Runs created before this v2 protocol cached one Polyglot solution per node and
+must not be used as benchmark estimates. They remain useful only as historical
+state-machine integration runs.
+
+The corrected 8-outcome pilot completed with no duplicate ordinary sample ids.
+Its disjoint two-task Python endpoint check passed 2/2 after repository-test
+context was enabled (versus 0/2 before that context). This is a protocol smoke
+test, not a statistically meaningful benchmark result.
 
 Generated code is executed only in Docker with networking disabled, a
 read-only root filesystem, a memory cap, a PID cap, and a wall-clock timeout.

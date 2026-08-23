@@ -8,6 +8,22 @@ held-out Polyglot tasks for both its RQGM specialist and generalist endpoints.
 No result in this repository should currently be presented as a replication of
 that number.
 
+The first 128-outcome local run used a v1 coding adapter that cached one
+Polyglot solution per node and could count repeated deterministic test results
+as separate evidence. Its evaluator transition remains valid state-machine
+evidence, but its endpoint best-belief is not a valid benchmark estimate. The
+v2 adapter now uses sample-level artifact keys, fresh validation items,
+cross-evaluator patch reuse, coder train feedback, bounded test-and-repair, and
+a disjoint endpoint test split.
+
+The v2 corrected pilot was executed at eight validation outcomes. Its records
+contained no repeated ordinary sample id within a node/task cell; the fixed and
+learned coder cells paired on the same cached `transpose` patch. After public
+repository tests were made available to the task agent (matching the paper's
+tool-using coder more closely), the disjoint two-task Python endpoint smoke
+check passed 2/2 in one attempt per task. The pre-context check was 0/2. Neither
+two-task result is comparable with the paper's 166-task endpoint.
+
 The closest public reconstruction is under `examples/paper_coding`. It uses the
 official public Aider Polyglot task repository and public CRAVE data, while
 keeping CRAVE test examples behind the private anchor interface.

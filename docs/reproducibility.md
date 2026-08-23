@@ -10,6 +10,9 @@
    experiment manifest—not examples.
 6. Choose a validation-outcome budget and checkpoints before observing results.
 7. Verify the evolved-code sandbox with a harmless escape test.
+8. For multi-item benchmarks, verify that each ordinary validation outcome has
+   a distinct sample id within its node/task cell. Reuse is allowed only for a
+   declared cross-evaluator re-score of the same cached artifact.
 
 ## During a run
 

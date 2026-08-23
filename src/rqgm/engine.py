@@ -151,7 +151,12 @@ class RQGM:
             self.config.validation_call_budget,
         )
         if outcome.artifact_key and outcome.artifact is not None:
-            node.cached_artifacts[cache_key] = outcome.artifact
+            # Store artifacts by their declared sample identity. A task cell may
+            # contain many benchmark items; collapsing them under task_id would
+            # turn repeated measurements of one deterministic artifact into
+            # false independent evidence. Legacy adapters that use task_id as
+            # artifact_key retain their previous behavior.
+            node.cached_artifacts[outcome.artifact_key] = outcome.artifact
         self.archive.add_record(
             UtilityRecord(
                 record_id=str(uuid4()),
