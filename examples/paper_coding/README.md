@@ -13,8 +13,8 @@ This experiment is the closest public reconstruction of the coding domain in
 It is **not** an exact reproduction of the paper's headline result. The paper
 does not publish its 10/49/166 Polyglot split, production prompts, model
 provider revision, or harness. `configs/paper_full.json` records the reported
-settings as a target manifest; the runnable pilot deliberately uses a small
-Python-only public subset.
+settings as a target manifest. The `budget128-v3.json` reconstruction uses a
+public, balanced six-language split and must be reported under its own name.
 
 ## Data isolation
 
@@ -25,22 +25,40 @@ file, or committed artifact. The manifest stores only a SHA-256 fingerprint.
 
 ## Run
 
-Prerequisites are a running Docker daemon, the `python:3.12-slim` image, the
-official Polyglot repository at `data/polyglot-benchmark`, and an authenticated
-Codex CLI.
+Prerequisites are a running Docker daemon, the official Polyglot repository at
+`data/polyglot-benchmark`, and an authenticated Codex CLI. Build and verify the
+six pinned evaluator images before a model-backed run:
 
 ```powershell
 .\.venv\Scripts\python.exe examples\paper_coding\prepare_data.py
-.\.venv\Scripts\python.exe examples\paper_coding\run.py \
-  --config examples\paper_coding\configs\pilot.json
+.\examples\paper_coding\build-images.ps1
+$env:PYTHONPATH=(Resolve-Path src)
+.\.venv\Scripts\python.exe examples\paper_coding\smoke_polyglot.py
+.\examples\paper_coding\run-budget128.ps1
 ```
 
-The longer public reconstruction uses `configs/budget128.json`: 128 binary
-validation outcomes, checkpoints at 8/16/32/64, three batched training samples
-per node, one coder training task per node, disjoint Python Polyglot
-train/validation/test splits, 100 CRAVE validation examples, and a 20-example
-withheld CRAVE anchor. The 20-example anchor is a declared cost/context
-approximation, not the paper's 100-item test condition.
+The current public reconstruction uses `configs/budget128-v3.json`: one shared
+budget of 128 binary validation outcomes, checkpoints at 8/16/32/64/96, three
+batched training samples per node, one coder training task per node, disjoint
+and language-balanced Polyglot train/validation/test splits, 100 CRAVE
+validation examples, and a 20-example withheld CRAVE anchor. It is one
+cross-language co-evolution run—not six independent 128-outcome runs. Held-out
+results report each language and their macro-average. The 20-example anchor is
+a declared cost/context approximation, not the paper's 100-item condition.
+
+## Evolved codebase boundary (v3)
+
+An archive node is now a complete sandboxed agent codebase rather than a single
+prompt blob. The meta-agent returns the complete next file tree and may add,
+replace, or delete any UTF-8 text file inside it, including `agent.py`, helper
+modules, prompts, parsers, and coder/repair/reviewer role logic. Omitted files
+are deleted. The trusted JSON stdin/stdout protocol, RQGM engine, benchmark,
+private anchors, and sandbox policy remain outside the editable tree.
+
+Every evolved tree is protocol-smoked for all three roles and then executed as
+UID 65534 in a networkless, capability-free Docker container with a read-only
+root and read-only code mount. Evolved code is never imported or executed by
+the host Python process. File-count and byte limits bound the mutation surface.
 
 ## Sample-aware protocol (v2)
 

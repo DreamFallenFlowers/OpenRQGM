@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import difflib
 import hashlib
 import json
 import os
@@ -16,6 +15,24 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from agent_workspace import (
+    AgentWorkspaceRunner,
+    seed_workspace,
+    validate_workspace,
+    workspace_from_files,
+)
+from polyglot import (
+    DEFAULT_IMAGES,
+    LANGUAGES,
+    DockerPolyglotRunner,
+    PolyglotTask,
+    replacements_from_json,
+    split_balanced,
+)
+from polyglot import (
+    material as task_material,
+)
 
 from rqgm import (
     RQGM,
@@ -45,13 +62,6 @@ def load_rows(split: str) -> list[dict[str, Any]]:
     if not path.exists():
         raise FileNotFoundError(f"run prepare_data.py first; missing {path}")
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def python_tasks(seed: int) -> list[Path]:
-    base = POLYGLOT / "python" / "exercises" / "practice"
-    tasks = sorted(path for path in base.iterdir() if path.is_dir())
-    random.Random(seed).shuffle(tasks)
-    return tasks
 
 
 def sample_rows(rows: list[dict[str, Any]], count: int, seed: int) -> list[dict[str, Any]]:
@@ -175,55 +185,60 @@ LABEL_SCHEMA = {
 }
 
 
-def reviewer_prompt(policy: str, example: dict[str, Any]) -> str:
-    return f"""You are a code-review classifier. Follow this frozen policy:
-<policy>
-{policy}
-</policy>
-
-Classify the pull request as APPROVE or REQUEST_CHANGES. Use only the supplied
-text. Do not browse, search, call tools, or rely on repository access.
-
-<pull_request>
-{json.dumps(example, ensure_ascii=False)}
-</pull_request>
-Return the required JSON only."""
-
-
 @dataclass(slots=True)
 class WorkspaceEditor:
     client: CodexCli
+    agent_runner: AgentWorkspaceRunner
 
     async def edit(self, parent, archive, budget):  # type: ignore[no-untyped-def]
         del budget
         feedback = parent.training_feedback[-3:]
-        prompt = f"""Improve a two-role coding workspace by making one bounded strategy edit.
-The coder solves Python Exercism tasks. The reviewer predicts whether a patch
-should pass review. Training feedback may be used; validation and anchor labels
-are unavailable. Coder training feedback contains sandbox test outcomes and may
-be used to improve the generation or repair policy. Do not browse, call tools,
-or name benchmark answers.
+        prompt = f"""You are the meta-agent for a two-role polyglot coding system. Improve the
+entire agent codebase by one bounded change. You may add, remove, or replace any
+text file inside this codebase, including agent.py, helper modules, prompts,
+parsing, and role logic. The fixed JSON protocol is stdin
+{{"operation":"coder|repair|reviewer","context":{{...}}}} and stdout
+{{"prompt":"..."}}. Code executes without network, credentials, repository,
+validation labels, or private anchors. Never attempt to change the RQGM engine,
+sandbox policy, benchmark tests, or host. Training feedback is the only outcome
+evidence available. The six task languages are cpp, go, java, javascript,
+python, and rust. Do not browse, call tools, or include benchmark answers.
 
-Current workspace:
-{json.dumps(parent.workspace, ensure_ascii=False)}
+Current agent codebase:
+{json.dumps(parent.workspace["files"], ensure_ascii=False)}
 Lineage training feedback:
 {json.dumps(feedback, ensure_ascii=False)}
-Archive prompt hashes:
+Archive codebase hashes:
 {json.dumps([canonical_hash(node.workspace) for node in archive])}
 
-Return complete replacement prompts as JSON."""
+Return the complete next codebase as a list of UTF-8 text files. Include every
+file that should exist; omitted files are deleted."""
         schema = {
             "type": "object",
             "properties": {
-                "coder_prompt": {"type": "string"},
-                "reviewer_prompt": {"type": "string"},
-                "repair_prompt": {"type": "string"},
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                        "required": ["path", "content"],
+                        "additionalProperties": False,
+                    },
+                },
             },
-            "required": ["coder_prompt", "reviewer_prompt", "repair_prompt"],
+            "required": ["files"],
             "additionalProperties": False,
         }
         try:
-            return await self.client.json(prompt, schema, "workspace-edit")
+            result = await self.client.json(prompt, schema, "workspace-edit")
+            workspace = workspace_from_files(result["files"])
+            if canonical_hash(workspace) == canonical_hash(parent.workspace):
+                return None
+            for operation in ("coder", "repair", "reviewer"):
+                await asyncio.to_thread(
+                    self.agent_runner.prompt, workspace, operation, {"protocol_smoke": True}
+                )
+            return workspace
         except (
             OSError,
             RuntimeError,
@@ -235,208 +250,130 @@ Return complete replacement prompts as JSON."""
 
 
 @dataclass(slots=True)
-class DockerPythonRunner:
-    timeout: int
-    image: str = "python:3.12-slim"
-
-    def source_file(self, task: Path) -> Path:
-        candidates = sorted(
-            path
-            for path in task.glob("*.py")
-            if not path.name.endswith("_test.py") and not path.name.startswith("test_")
-        )
-        if len(candidates) != 1:
-            raise RuntimeError(f"expected one editable Python file in {task}, got {candidates}")
-        return candidates[0]
-
-    def run(self, task: Path, replacement: str) -> tuple[int, dict[str, Any]]:
-        with tempfile.TemporaryDirectory(prefix="openrqgm-task-") as temp:
-            copied = Path(temp) / task.name
-            shutil.copytree(task, copied)
-            target = copied / self.source_file(task).name
-            target.write_text(replacement, encoding="utf-8")
-            command = [
-                "docker",
-                "run",
-                "--rm",
-                "--network",
-                "none",
-                "--read-only",
-                "--memory",
-                "512m",
-                "--cpus",
-                "1",
-                "--pids-limit",
-                "128",
-                "--cap-drop",
-                "ALL",
-                "--security-opt",
-                "no-new-privileges",
-                "--user",
-                "65534:65534",
-                "-e",
-                "PYTHONDONTWRITEBYTECODE=1",
-                "--tmpfs",
-                "/tmp:rw,noexec,nosuid,size=64m",
-                "-v",
-                f"{copied.resolve()}:/work:ro",
-                "-w",
-                "/work",
-                self.image,
-                "python",
-                "-m",
-                "unittest",
-                "discover",
-                "-p",
-                "*_test.py",
-            ]
-            try:
-                completed = subprocess.run(
-                    command,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    capture_output=True,
-                    timeout=self.timeout,
-                    check=False,
-                )
-                metadata = {
-                    "returncode": completed.returncode,
-                    "stdout_tail": completed.stdout[-4000:],
-                    "stderr_tail": completed.stderr[-8000:],
-                }
-                return int(completed.returncode == 0), metadata
-            except subprocess.TimeoutExpired:
-                return 0, {"timeout": True}
-            except OSError as error:
-                return 0, {"sandbox_error": type(error).__name__}
-
-
-@dataclass(slots=True)
 class CodingTaskEvaluator:
     client: CodexCli
-    runner: DockerPythonRunner
-    validation_tasks: list[Path]
+    runner: DockerPolyglotRunner
+    agent_runner: AgentWorkspaceRunner
+    validation_tasks: list[PolyglotTask]
     crave_validation: list[dict[str, Any]]
     random_seed: int
     repair_attempts: int = 1
 
-    def _task_material(self, task: Path) -> dict[str, str]:
-        source_path = self.runner.source_file(task)
-        instructions = next((task / ".docs").glob("instruction*.md"), None)
-        task_text = instructions.read_text(encoding="utf-8") if instructions else task.name
-        starter = source_path.read_text(encoding="utf-8")
-        test_files = sorted(
-            path
-            for path in task.glob("*.py")
-            if path.name.endswith("_test.py") or path.name.startswith("test_")
-        )
-        tests = "\n\n".join(
-            f"# file: {path.name}\n{path.read_text(encoding='utf-8')}" for path in test_files
-        )
-        return {
-            "task": task.name,
-            "task_path": str(task),
-            "source_file": source_path.name,
-            "instructions": task_text,
-            "starter": starter,
-            "tests": tests,
-        }
+    def _task_material(self, task: PolyglotTask) -> dict[str, Any]:
+        return task_material(task)
 
-    def _ordered_tasks(self, node_id: str, tasks: Sequence[Path], phase: str) -> list[Path]:
-        return sorted(
-            tasks,
-            key=lambda task: hashlib.sha256(
-                f"{self.random_seed}:{phase}:{node_id}:{task.name}".encode()
+    def _ordered_tasks(
+        self, node_id: str, tasks: Sequence[PolyglotTask], phase: str
+    ) -> list[PolyglotTask]:
+        by_language: dict[str, list[PolyglotTask]] = {}
+        for task in tasks:
+            by_language.setdefault(task.language, []).append(task)
+        for language, language_tasks in by_language.items():
+            by_language[language] = sorted(
+                language_tasks,
+                key=lambda task: hashlib.sha256(
+                    f"{self.random_seed}:{phase}:{node_id}:{task.task_id}".encode()
+                ).digest(),
+            )
+        languages = sorted(
+            by_language,
+            key=lambda language: hashlib.sha256(
+                f"{self.random_seed}:{phase}:{node_id}:language:{language}".encode()
             ).digest(),
         )
+        ordered: list[PolyglotTask] = []
+        for index in range(max((len(items) for items in by_language.values()), default=0)):
+            ordered.extend(
+                by_language[language][index]
+                for language in languages
+                if index < len(by_language[language])
+            )
+        return ordered
 
     async def _generate_artifact(
         self,
         node: WorkspaceNode,
-        task: Path,
+        task: PolyglotTask,
         *,
         phase: str,
         purpose_prefix: str,
     ) -> dict[str, Any]:
         material = self._task_material(task)
-        prompt = f"""Act as a coding task solver under this frozen policy:
-{node.workspace["coder_prompt"]}
-
-Solve the task using only the supplied instructions and starter file. Return
-the complete Python source file, not a diff. A sandboxed test runner will return
-concrete feedback and you may receive a bounded repair turn. Do not browse or
-search the web.
-
-<instructions>
-{material["instructions"]}
-</instructions>
-<starter filename={material["source_file"]!r}>
-{material["starter"]}
-</starter>
-<repository_tests>
-{material["tests"]}
-</repository_tests>"""
+        prompt = await asyncio.to_thread(
+            self.agent_runner.prompt,
+            node.workspace,
+            "coder",
+            {
+                "language": material["language"],
+                "instructions": material["instructions"],
+                "editable_files": material["starters"],
+                "repository_tests": material["tests"],
+                "response_contract": "Return complete contents for editable files only.",
+            },
+        )
         schema = {
             "type": "object",
-            "properties": {"replacement": {"type": "string"}},
-            "required": ["replacement"],
+            "properties": {
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                        "required": ["path", "content"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["files"],
             "additionalProperties": False,
         }
-        result = await self.client.json(prompt, schema, f"{purpose_prefix}:{task.name}:attempt-0")
-        replacement = result["replacement"]
-        outcome, sandbox = await asyncio.to_thread(self.runner.run, task, replacement)
+        result = await self.client.json(
+            prompt, schema, f"{purpose_prefix}:{task.task_id}:attempt-0"
+        )
+        replacements = replacements_from_json(result["files"])
+        outcome, sandbox = await asyncio.to_thread(self.runner.run, task, replacements)
         attempts = 1
         for repair_index in range(self.repair_attempts):
             if outcome:
                 break
-            repair_policy = node.workspace.get(
-                "repair_prompt",
-                "Use the concrete test failure to repair the implementation without changing "
-                "the API.",
+            repair_prompt = await asyncio.to_thread(
+                self.agent_runner.prompt,
+                node.workspace,
+                "repair",
+                {
+                    "language": material["language"],
+                    "instructions": material["instructions"],
+                    "starter_files": material["starters"],
+                    "repository_tests": material["tests"],
+                    "current_files": replacements,
+                    "sandbox_result": sandbox,
+                },
             )
-            repair_prompt = f"""Repair a Python solution under this frozen policy:
-{repair_policy}
-
-Use only the task, starter, current implementation, and sandbox output below.
-Do not browse or search the web. Return the complete corrected source file.
-
-<instructions>
-{material["instructions"]}
-</instructions>
-<starter filename={material["source_file"]!r}>
-{material["starter"]}
-</starter>
-<repository_tests>
-{material["tests"]}
-</repository_tests>
-<current>
-{replacement}
-</current>
-<sandbox_result>
-{json.dumps(sandbox, ensure_ascii=False)}
-</sandbox_result>"""
             repaired = await self.client.json(
                 repair_prompt,
                 schema,
-                f"{purpose_prefix}:{task.name}:repair-{repair_index + 1}",
+                f"{purpose_prefix}:{task.task_id}:repair-{repair_index + 1}",
             )
-            replacement = repaired["replacement"]
-            outcome, sandbox = await asyncio.to_thread(self.runner.run, task, replacement)
+            replacements = replacements_from_json(repaired["files"])
+            outcome, sandbox = await asyncio.to_thread(self.runner.run, task, replacements)
             attempts += 1
+        import difflib
+
         patch = "".join(
-            difflib.unified_diff(
-                material["starter"].splitlines(keepends=True),
+            line
+            for path, replacement in replacements.items()
+            for line in difflib.unified_diff(
+                material["starters"].get(path, "").splitlines(keepends=True),
                 replacement.splitlines(keepends=True),
-                fromfile=f"a/{material['source_file']}",
-                tofile=f"b/{material['source_file']}",
+                fromfile=f"a/{path}",
+                tofile=f"b/{path}",
             )
         )
         artifact = {
             "kind": "polyglot-solution",
             "phase": phase,
             **material,
-            "replacement": replacement,
+            "replacements": replacements,
             "patch": patch,
             "test_outcome": outcome,
             "sandbox": sandbox,
@@ -478,7 +415,7 @@ Do not browse or search the web. Return the complete corrected source file.
                 for candidate in self._ordered_tasks(
                     node.node_id, self.validation_tasks, "validation"
                 )
-                if candidate.name not in used
+                if candidate.task_id not in used
             ),
             None,
         )
@@ -490,7 +427,7 @@ Do not browse or search the web. Return the complete corrected source file.
             phase="validation",
             purpose_prefix="coder-validation",
         )
-        return f"polyglot:validation:{task.name}", artifact
+        return f"polyglot:validation:{task.task_id}", artifact
 
     def _next_crave_example(self, node: WorkspaceNode) -> tuple[str, dict[str, Any]]:
         used = {
@@ -516,7 +453,7 @@ Do not browse or search the web. Return the complete corrected source file.
     async def training_samples(
         self,
         node: WorkspaceNode,
-        tasks: Sequence[Path],
+        tasks: Sequence[PolyglotTask],
         count: int,
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
@@ -531,7 +468,7 @@ Do not browse or search the web. Return the complete corrected source file.
                 )
                 results.append(
                     {
-                        "task": task.name,
+                        "task": task.task_id,
                         "outcome": artifact["test_outcome"],
                         "attempts": artifact["attempts"],
                         "sandbox": artifact["sandbox"],
@@ -544,13 +481,13 @@ Do not browse or search the web. Return the complete corrected source file.
                 ValueError,
                 json.JSONDecodeError,
             ) as error:
-                results.append({"task": task.name, "outcome": 0, "error": type(error).__name__})
+                results.append({"task": task.task_id, "outcome": 0, "error": type(error).__name__})
         return results
 
     async def heldout_results(
         self,
         node: WorkspaceNode,
-        tasks: Sequence[Path],
+        tasks: Sequence[PolyglotTask],
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         for task in tasks:
@@ -563,7 +500,7 @@ Do not browse or search the web. Return the complete corrected source file.
                 )
                 results.append(
                     {
-                        "task": task.name,
+                        "task": task.task_id,
                         "outcome": artifact["test_outcome"],
                         "attempts": artifact["attempts"],
                         "sandbox": artifact["sandbox"],
@@ -576,7 +513,7 @@ Do not browse or search the web. Return the complete corrected source file.
                 ValueError,
                 json.JSONDecodeError,
             ) as error:
-                results.append({"task": task.name, "outcome": 0, "error": type(error).__name__})
+                results.append({"task": task.task_id, "outcome": 0, "error": type(error).__name__})
         return results
 
     async def evaluate(self, node, task, evaluator, cached_artifact, budget):  # type: ignore[no-untyped-def]
@@ -623,14 +560,20 @@ Do not browse or search the web. Return the complete corrected source file.
                 "id": artifact["task"],
                 "title": f"Implement {artifact['task']}",
                 "instructions": artifact["instructions"],
-                "starter": artifact["starter"],
+                "starter": artifact["starters"],
                 "tests": artifact["tests"],
                 "patch": artifact["patch"],
                 "description": "Judge this patch against the complete task specification.",
             }
             try:
+                prompt = await asyncio.to_thread(
+                    self.agent_runner.prompt,
+                    evaluator.artifact["workspace"],
+                    "reviewer",
+                    {"examples": [example], "response_contract": "Return one label for the id."},
+                )
                 result = await self.client.json(
-                    reviewer_prompt(evaluator.artifact["prompt"], example),
+                    prompt,
                     LABEL_SCHEMA,
                     f"learned-review:{artifact['task']}",
                 )
@@ -654,12 +597,20 @@ Do not browse or search the web. Return the complete corrected source file.
                 },
             )
         if task.task_id == "reviewer-crave-validation":
+            example_id = "unselected"
             try:
                 example_id, row = self._next_crave_example(node)
+                prompt = await asyncio.to_thread(
+                    self.agent_runner.prompt,
+                    node.workspace,
+                    "reviewer",
+                    {
+                        "examples": [review_example(example_id, row)],
+                        "response_contract": "Return one label for the id.",
+                    },
+                )
                 result = await self.client.json(
-                    reviewer_prompt(
-                        node.workspace["reviewer_prompt"], review_example(example_id, row)
-                    ),
+                    prompt,
                     LABEL_SCHEMA,
                     f"crave-validation:{example_id}",
                 )
@@ -692,16 +643,16 @@ class ChallengerSource:
         self, slot: EvaluatorSlot, archive: Sequence[WorkspaceNode]
     ) -> Sequence[EvaluatorCandidate]:
         candidates: dict[str, EvaluatorCandidate] = {}
-        incumbent_prompt = slot.incumbent.artifact["prompt"]
+        incumbent_hash = canonical_hash(slot.incumbent.artifact["workspace"])
         for node in archive:
-            prompt = node.workspace["reviewer_prompt"]
-            if prompt == incumbent_prompt:
+            digest_full = canonical_hash(node.workspace)
+            if digest_full == incumbent_hash:
                 continue
-            digest = hashlib.sha256(prompt.encode()).hexdigest()[:16]
+            digest = digest_full.removeprefix("sha256:")[:16]
             candidate_id = f"reviewer-{digest}"
             candidates[candidate_id] = EvaluatorCandidate.create(
                 slot.slot_id,
-                {"prompt": prompt},
+                {"workspace": node.workspace},
                 source=f"workspace:{node.node_id}",
                 parent_id=slot.incumbent.candidate_id,
                 candidate_id=candidate_id,
@@ -732,23 +683,20 @@ class PrivateCraveAnchors:
 class BatchedAnchorEvaluator:
     client: CodexCli
     provider: PrivateCraveAnchors
+    agent_runner: AgentWorkspaceRunner
     predictions: dict[str, dict[str, str]] = field(default_factory=dict)
 
     async def _predict(self, candidate: EvaluatorCandidate) -> dict[str, str]:
         examples = await self.provider.examples(candidate.slot_id)
-        prompt = f"""You are a code-review classifier. Follow this frozen policy:
-<policy>
-{candidate.artifact["prompt"]}
-</policy>
-
-Classify every supplied pull request as APPROVE or REQUEST_CHANGES. Use only
-the supplied text. Do not browse, search, call tools, or use repository access.
-Do not omit or reorder ids.
-
-<examples>
-{json.dumps([example.artifact for example in examples], ensure_ascii=False)}
-</examples>
-Return the required JSON only."""
+        prompt = await asyncio.to_thread(
+            self.agent_runner.prompt,
+            candidate.artifact["workspace"],
+            "reviewer",
+            {
+                "examples": [example.artifact for example in examples],
+                "response_contract": "Return a prediction for every id without reordering.",
+            },
+        )
         schema = {
             "type": "object",
             "properties": {
@@ -796,7 +744,7 @@ class TrainingFeedback:
     rows: list[dict[str, Any]]
     reviewer_samples_per_node: int
     coding_evaluator: CodingTaskEvaluator
-    coder_tasks: list[Path]
+    coder_tasks: list[PolyglotTask]
     coder_samples_per_node: int
     index: int = 0
 
@@ -808,19 +756,15 @@ class TrainingFeedback:
             example_id = f"train-{self.index % len(self.rows)}"
             self.index += 1
             selected.append((example_id, row))
-        prompt = f"""You are a code-review classifier. Follow this frozen policy:
-<policy>
-{node.workspace["reviewer_prompt"]}
-</policy>
-
-Classify every supplied pull request as APPROVE or REQUEST_CHANGES. Use only
-the supplied text. Do not browse, search, call tools, or use repository access.
-Do not omit or reorder ids.
-
-<examples>
-{json.dumps([review_example(example_id, row) for example_id, row in selected], ensure_ascii=False)}
-</examples>
-Return the required JSON only."""
+        prompt = await asyncio.to_thread(
+            self.coding_evaluator.agent_runner.prompt,
+            node.workspace,
+            "reviewer",
+            {
+                "examples": [review_example(example_id, row) for example_id, row in selected],
+                "response_contract": "Return a prediction for every id without reordering.",
+            },
+        )
         schema = {
             "type": "object",
             "properties": {
@@ -892,56 +836,44 @@ Return the required JSON only."""
 
 def build_engine(
     config: dict[str, Any], client: CodexCli
-) -> tuple[RQGM, CodingTaskEvaluator, list[Path]]:
+) -> tuple[RQGM, CodingTaskEvaluator, list[PolyglotTask]]:
     seed = int(config["random_seed"])
-    tasks = python_tasks(seed)
-    train_count = int(config["polyglot_train_tasks"])
-    validation_count = int(config["polyglot_validation_tasks"])
-    test_count = int(config["polyglot_test_tasks"])
-    if train_count + validation_count + test_count > len(tasks):
-        raise ValueError("requested Polyglot train/validation/test splits overlap")
-    coder_train_tasks = tasks[:train_count]
-    validation_tasks = tasks[train_count : train_count + validation_count]
-    heldout_tasks = tasks[
-        train_count + validation_count : train_count + validation_count + test_count
-    ]
+    coder_train_tasks, validation_tasks, heldout_tasks = split_balanced(
+        POLYGLOT,
+        seed,
+        int(config["polyglot_train_tasks_per_language"]),
+        int(config["polyglot_validation_tasks_per_language"]),
+        int(config["polyglot_test_tasks_per_language"]),
+    )
     crave_train = sample_rows(load_rows("train"), 32, seed + 1)
     crave_validation = sample_rows(
         load_rows("validation"), int(config["crave_validation_examples"]), seed + 2
     )
     crave_anchors = sample_rows(load_rows("test"), int(config["crave_anchor_examples"]), seed + 3)
     provider = PrivateCraveAnchors(crave_anchors)
+    images = config.get("polyglot_images", DEFAULT_IMAGES)
+    agent_runner = AgentWorkspaceRunner(
+        int(config["agent_timeout_seconds"]), config.get("agent_image", "python:3.12-slim")
+    )
     task_evaluator = CodingTaskEvaluator(
         client,
-        DockerPythonRunner(int(config["container_timeout_seconds"])),
+        DockerPolyglotRunner(int(config["container_timeout_seconds"]), images),
+        agent_runner,
         validation_tasks,
         crave_validation,
         seed + 4,
         int(config["coder_repair_attempts"]),
     )
-    initial_reviewer = (
-        "Approve only when the patch is correct, complete, scoped to the request, and has no "
-        "clear regression, unsafe behavior, or missing edge case. Otherwise request changes."
-    )
+    initial_workspace = seed_workspace()
+    validate_workspace(initial_workspace)
     incumbent = EvaluatorCandidate.create(
         "code-reviewer",
-        {"prompt": initial_reviewer},
+        {"workspace": initial_workspace},
         source="seed",
         candidate_id="reviewer-seed",
     )
     engine = RQGM(
-        seed_workspace={
-            "coder_prompt": (
-                "Produce a minimal correct implementation. Preserve the required API, handle edge "
-                "cases explicitly, and return syntactically valid Python without test-specific "
-                "hacks."
-            ),
-            "reviewer_prompt": initial_reviewer,
-            "repair_prompt": (
-                "Use the concrete sandbox failure to correct the algorithm while preserving the "
-                "required public API. Make the smallest complete fix and avoid test-specific hacks."
-            ),
-        },
+        seed_workspace=initial_workspace,
         tasks=[
             RoleTask("coder", "coder-polyglot-tests", "fixed"),
             RoleTask("coder", "coder-learned-review", "learned", "code-reviewer"),
@@ -949,11 +881,11 @@ def build_engine(
         ],
         slots=[EvaluatorSlot("code-reviewer", "reviewer", incumbent)],
         runtime=Runtime(
-            editor=WorkspaceEditor(client),
+            editor=WorkspaceEditor(client, agent_runner),
             task_evaluator=task_evaluator,
             challenger_source=ChallengerSource(),
             anchor_provider=provider,
-            anchor_evaluator=BatchedAnchorEvaluator(client, provider),
+            anchor_evaluator=BatchedAnchorEvaluator(client, provider, agent_runner),
             training_feedback=TrainingFeedback(
                 client,
                 crave_train,
@@ -994,10 +926,26 @@ async def execute(config_path: Path) -> None:
         if node_id not in heldout_by_node:
             heldout_by_node[node_id] = await task_evaluator.heldout_results(node, heldout_tasks)
         outcomes = heldout_by_node[node_id]
+        by_language = {
+            language: {
+                "passes": sum(
+                    item["outcome"]
+                    for item in outcomes
+                    if item["task"].split("/", 1)[0] == language
+                ),
+                "total": sum(item["task"].split("/", 1)[0] == language for item in outcomes),
+            }
+            for language in LANGUAGES
+        }
+        language_rates = [
+            scores["passes"] / scores["total"] for scores in by_language.values() if scores["total"]
+        ]
         heldout[endpoint_name] = {
             "node_id": node_id,
             "passes": sum(item["outcome"] for item in outcomes),
             "total": len(outcomes),
+            "by_language": by_language,
+            "macro_average": sum(language_rates) / len(language_rates),
             "outcomes": outcomes,
         }
     summary = {
@@ -1010,16 +958,24 @@ async def execute(config_path: Path) -> None:
         },
         "model_calls": client.calls,
         "heldout": heldout,
+        "polyglot": {
+            "languages": ["cpp", "go", "java", "javascript", "python", "rust"],
+            "images": config.get("polyglot_images", DEFAULT_IMAGES),
+            "agent_image": config.get("agent_image", "python:3.12-slim"),
+            "dataset_commit": "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f",
+            "agent_workspace_format": "openrqgm-agent-codebase-v1",
+        },
         "paper_comparison_valid": False,
         "paper_reported_rqgm_endpoint": "119/166",
         "wall_time_seconds": round(time.monotonic() - started, 3),
         "limitations": [
-            "Python-only public subset",
             "paper split and production prompts are unpublished",
             "gpt-5.6-sol differs from the paper's GPT-5 low endpoint",
             "anchor inference is batched as a declared cost-saving approximation",
-            "structured prompt/repair strategy evolution is narrower than arbitrary codebase edits",
-            "only the public Python subset is implemented",
+            "the meta-agent may modify the complete sandboxed agent codebase but not the "
+            "trusted RQGM engine, private anchors, benchmark data, or sandbox boundary",
+            "public Aider Polyglot tasks are balanced across six languages; this is not the "
+            "paper's unpublished exact split",
         ],
     }
     (output / "summary.json").write_text(

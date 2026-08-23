@@ -1,0 +1,41 @@
+FROM ubuntu:24.04 AS native
+RUN sed -i \
+    -e 's|http://archive.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
+    -e 's|http://security.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
+    /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends cmake g++ make golang-go python3 python3-pytest \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /work
+
+FROM native AS cpp
+FROM native AS go
+FROM native AS python
+
+FROM gradle:8.7-jdk21 AS java
+ENV GRADLE_USER_HOME=/opt/gradle-cache
+COPY data/polyglot-benchmark/java/exercises/practice/affine-cipher /tmp/java-cache
+# The benchmark checkout intentionally contains a failing starter solution. Running
+# the suite once still resolves both compile- and runtime-test dependencies.
+RUN cd /tmp/java-cache && (gradle --no-daemon test || true) && rm -rf /tmp/java-cache
+WORKDIR /work
+
+FROM node:20-bookworm-slim AS javascript
+RUN mkdir -p /opt/npm && cd /opt/npm && npm init -y \
+    && npm install --no-audit --no-fund \
+       jest@29.7.0 @babel/core@7.25.2 \
+       @exercism/babel-preset-javascript@0.2.1 \
+       @exercism/eslint-config-javascript@0.6.0 \
+       @types/jest@29.5.12 @types/node@20.12.12 \
+       babel-jest@29.6.4 core-js@3.37.1 eslint@8.49.0
+
+ENV PATH="/opt/npm/node_modules/.bin:${PATH}"
+WORKDIR /work
+
+FROM rust:1.81-bookworm AS rust
+ENV CARGO_HOME=/opt/cargo
+RUN mkdir /tmp/cargo-cache && cd /tmp/cargo-cache && cargo init --lib \
+    && printf '\nanyhow = "1.0"\nrand = "0.8"\ntime = "=0.3.36"\n' >> Cargo.toml \
+    && cargo fetch && rm -rf /tmp/cargo-cache
+ENV CARGO_NET_OFFLINE=true
+WORKDIR /work

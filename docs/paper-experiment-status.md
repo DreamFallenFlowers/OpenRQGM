@@ -37,7 +37,7 @@ keeping CRAVE test examples behind the private anchor interface.
 | Polyglot task source | Public reconstruction | Official Aider repository pinned locally at commit `7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f`. The paper's exact task split is unpublished. |
 | CRAVE reviewer anchor | Public reconstruction | Deterministic withheld sample of the public CRAVE test split; exact paper sample is unpublished. |
 | Model and prompts | Approximation | Pilot uses authenticated `gpt-5.6-sol`; the paper used GPT-5 low and does not publish production prompts/provider revision. |
-| Execution harness | Approximation | Python-only Docker runner, not the paper's unpublished six-language production harness. |
+| Execution harness | Public reconstruction | Six isolated language images run the official public Aider commands for C++, Go, Java, JavaScript, Python, and Rust. This is still not the paper's unpublished production harness. |
 | Anchor inference | Approximation | Examples are classified in a batch per evaluator candidate to reduce model-call overhead. Binary outcomes are still recorded per example. |
 
 ## Executed pilot
@@ -82,3 +82,9 @@ first execution preserved at `runs/paper-coding-pilot-attempt1`.
 5. Evaluate frozen specialist/generalist endpoints on all 166 held-out tasks.
 6. Report the reconstruction separately from the paper's number and include
    uncertainty and contamination limitations.
+
+Item 2 is now implemented for the public Aider checkout and passes a 6/6
+reference-solution smoke test. The remaining items—especially the unpublished
+split, 12,288-outcome scale, exact model endpoint, and repeated seeds—still
+prevent a headline empirical-replication claim. The 128-outcome v3 run is an
+integration and method-reconstruction experiment only.
