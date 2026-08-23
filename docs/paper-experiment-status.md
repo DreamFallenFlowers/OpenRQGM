@@ -28,6 +28,20 @@ The closest public reconstruction is under `examples/paper_coding`. It uses the
 official public Aider Polyglot task repository and public CRAVE data, while
 keeping CRAVE test examples behind the private anchor interface.
 
+The completed six-language v3 integration run consumed 128 binary outcomes and
+224 successful model calls in 7,507 seconds. Its generalist and coder endpoint
+were the same archive node and passed a small 12/12 held-out set. All five
+checkpoints retained the seed reviewer, so this run validates the challenger
+and anchor-election path but does not provide an observed evaluator transition
+or an estimate of co-evolution's causal benefit.
+
+The next registered experiment is `polyglot-matched-v1`: verifier-only, fixed
+reviewer, and co-evolving reviewer conditions at both 512 and 1,024 outcomes.
+It restores the 100-example anchor, expands held-out evaluation to 60 disjoint
+tasks, records Codex raw/blended tokens, and enforces identical data and anchor
+fingerprints across all six cells. These remain intermediate public
+reconstruction experiments, not the paper's unpublished exact split.
+
 ## What is exact, reconstructed, and approximate
 
 | Component | Status | Notes |

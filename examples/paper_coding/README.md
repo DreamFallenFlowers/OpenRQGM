@@ -93,6 +93,44 @@ The model is instructed not to browse or call tools, and runs in an empty
 read-only Codex workspace. These controls cannot remove model pretraining
 contamination from a public benchmark.
 
+## Matched 512/1,024-outcome ablation
+
+`configs/ablations` defines six preregistered cells under
+`polyglot-matched-v1`. Every cell uses the same GPT-5.6 Sol model, random seed,
+six-language train/validation/held-out split, 100-example CRAVE anchor,
+20-example anchor inference batches, training settings, repair budget, images,
+and sandbox. Only the declared
+condition and validation budget/checkpoints may differ:
+
+- `verifier_only`: executable tests are the only utility; reviewer training is
+  disabled;
+- `fixed_reviewer`: adds a globally fixed reviewer utility and CRAVE reviewer
+  role, with no evaluator slot or anchor election;
+- `coevolving_reviewer`: uses the same three task cells but makes the reviewer
+  an epoch-frozen evaluator slot eligible for anchor-gated replacement.
+
+Each endpoint is tested on 60 disjoint tasks (ten per language). Codex JSONL
+usage is recorded as raw tokens and as the paper's
+`input_tokens + 5 * output_tokens` blended metric.
+
+```powershell
+# No model calls: verify all six cells share data/anchor/config fingerprints.
+.\examples\paper_coding\run-matched-ablation.ps1 -Preflight
+
+# Launch one cell in the background. Run cells sequentially to avoid contention.
+.\examples\paper_coding\run-matched-ablation.ps1 `
+  -Budget 512 -Condition verifier_only
+
+# After all three cells for one budget finish, produce the matched contrast report.
+$env:PYTHONPATH=(Resolve-Path src)
+.\.venv\Scripts\python.exe examples\paper_coding\ablation.py `
+  --report --budget 512
+```
+
+`ablation.py --run-all` is guarded by `--confirm-expensive-matrix`; the
+PowerShell launcher intentionally starts only one cell at a time. Every
+completed cell is automatically checked by the structural RQGM state auditor.
+
 ## Comparability
 
 The paper reports 119/166 held-out Polyglot tasks for both its specialist and

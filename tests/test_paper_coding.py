@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -31,6 +32,28 @@ def test_codex_discovery_avoids_windows_store_alias() -> None:
     assert "WindowsApps" not in MODULE.find_codex_executable()
 
 
+def test_codex_jsonl_token_usage_is_recorded_in_both_metrics() -> None:
+    output = "\n".join(
+        [
+            "non-json warning",
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 100,
+                        "cached_input_tokens": 20,
+                        "output_tokens": 10,
+                        "reasoning_output_tokens": 2,
+                    },
+                }
+            ),
+        ]
+    )
+    usage = MODULE.token_usage_from_jsonl(output)
+    assert usage["raw_total_tokens"] == 110
+    assert usage["blended_tokens"] == 150
+
+
 def test_challenger_source_skips_incumbent_artifact() -> None:
     incumbent_workspace = MODULE.seed_workspace()
     incumbent = MODULE.EvaluatorCandidate.create(
@@ -48,6 +71,100 @@ def test_challenger_source_skips_incumbent_artifact() -> None:
     ]
     candidates = asyncio.run(MODULE.ChallengerSource().challengers(slot, nodes))
     assert [candidate.artifact["workspace"] for candidate in candidates] == [changed]
+
+
+def test_ablation_condition_topologies_are_distinct_and_intentional() -> None:
+    workspace = MODULE.seed_workspace()
+    incumbent = MODULE.EvaluatorCandidate.create(
+        "code-reviewer",
+        {"workspace": workspace},
+        source="seed",
+        candidate_id="reviewer-seed",
+    )
+    verifier = MODULE.condition_components("verifier_only", incumbent)
+    fixed = MODULE.condition_components("fixed_reviewer", incumbent)
+    coevolving = MODULE.condition_components("coevolving_reviewer", incumbent)
+
+    assert [task.task_id for task in verifier[0]] == ["coder-polyglot-tests"]
+    assert verifier[1] == [] and verifier[2] is None and verifier[4] is False
+    assert len(fixed[0]) == len(coevolving[0]) == 3
+    assert fixed[1] == [] and fixed[2] is incumbent and fixed[4] is True
+    assert len(coevolving[1]) == 1 and coevolving[2] is None and coevolving[4] is True
+    fixed_learned = next(task for task in fixed[0] if task.task_id == "coder-learned-review")
+    evolved_learned = next(task for task in coevolving[0] if task.task_id == "coder-learned-review")
+    assert fixed_learned.kind == "fixed"
+    assert evolved_learned.kind == "learned"
+    assert fixed_learned.evaluator_slot is None
+    assert evolved_learned.evaluator_slot == "code-reviewer"
+
+
+def test_anchor_inference_is_chunked_without_changing_binary_examples() -> None:
+    rows = [
+        {
+            "pull_request_title": f"title-{index}",
+            "patch": f"patch-{index}",
+            "description": "description",
+            "hint": "hint",
+            "label": "APPROVE",
+        }
+        for index in range(5)
+    ]
+    provider = MODULE.PrivateCraveAnchors(rows)
+    runner = FakeAgentRunner()
+
+    class BatchClient:
+        def __init__(self) -> None:
+            self.purposes: list[str] = []
+
+        async def json(self, prompt, schema, purpose):  # type: ignore[no-untyped-def]
+            del prompt, schema
+            self.purposes.append(purpose)
+            examples = runner.contexts[-1]["examples"]
+            return {
+                "predictions": [{"id": example["id"], "label": "APPROVE"} for example in examples]
+            }
+
+    client = BatchClient()
+    evaluator = MODULE.BatchedAnchorEvaluator(client, provider, runner, batch_size=2)
+    candidate = MODULE.EvaluatorCandidate.create(
+        "code-reviewer",
+        {"workspace": MODULE.seed_workspace()},
+        source="test",
+        candidate_id="candidate",
+    )
+    examples = asyncio.run(provider.examples("code-reviewer"))
+    assert asyncio.run(evaluator.evaluate(candidate, examples[0])) == 1
+    assert client.purposes == [
+        "anchor:candidate:batch-0",
+        "anchor:candidate:batch-1",
+        "anchor:candidate:batch-2",
+    ]
+    assert len(evaluator.predictions["candidate"]) == 5
+
+
+def test_matched_ablation_configs_only_vary_declared_fields() -> None:
+    config_dir = MODULE_PATH.parent / "configs" / "ablations"
+    configs = [
+        json.loads(path.read_text(encoding="utf-8")) for path in sorted(config_dir.glob("*.json"))
+    ]
+    assert len(configs) == 6
+    allowed = {
+        "claim",
+        "experiment_condition",
+        "validation_budget",
+        "checkpoints",
+        "output",
+    }
+    projections = [
+        {key: value for key, value in config.items() if key not in allowed} for config in configs
+    ]
+    assert all(projection == projections[0] for projection in projections)
+    assert {config["validation_budget"] for config in configs} == {512, 1024}
+    assert {config["experiment_condition"] for config in configs} == {
+        "verifier_only",
+        "fixed_reviewer",
+        "coevolving_reviewer",
+    }
 
 
 class FakeClient:

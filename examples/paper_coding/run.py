@@ -57,6 +57,47 @@ def canonical_hash(value: object) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def source_identity() -> dict[str, Any]:
+    root = Path(__file__).resolve().parents[2]
+    try:
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {"commit": None, "dirty": None}
+    return {"commit": revision, "dirty": dirty}
+
+
+def token_usage_from_jsonl(output: str) -> dict[str, int]:
+    """Extract the final Codex turn usage while tolerating non-JSON warnings."""
+    usage: dict[str, int] = {}
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "turn.completed" or not isinstance(event.get("usage"), dict):
+            continue
+        usage = {key: int(value) for key, value in event["usage"].items() if isinstance(value, int)}
+    if usage:
+        usage["raw_total_tokens"] = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        usage["blended_tokens"] = usage.get("input_tokens", 0) + 5 * usage.get("output_tokens", 0)
+    return usage
+
+
 def load_rows(split: str) -> list[dict[str, Any]]:
     path = DATA / f"crave-{split}.json"
     if not path.exists():
@@ -135,6 +176,7 @@ class CodexCli:
                 "computer_use",
                 "--disable",
                 "plugins",
+                "--json",
                 "-m",
                 self.model,
                 "-C",
@@ -164,9 +206,15 @@ class CodexCli:
                 "prompt_sha256": canonical_hash(prompt),
                 "elapsed_seconds": round(time.monotonic() - started, 3),
             }
-            token_match = re.search(r"tokens used\s+([\d,]+)", completed.stdout)
-            if token_match:
-                event["tokens_used"] = int(token_match.group(1).replace(",", ""))
+            usage = token_usage_from_jsonl(completed.stdout)
+            if usage:
+                event.update(usage)
+            else:
+                token_match = re.search(
+                    r"tokens used\s+([\d,]+)", completed.stdout + "\n" + completed.stderr
+                )
+                if token_match:
+                    event["raw_total_tokens"] = int(token_match.group(1).replace(",", ""))
             self.calls.append(event)
             print(f"[model:done] {purpose} rc={completed.returncode}", flush=True)
             if completed.returncode != 0 or not output_path.exists():
@@ -182,6 +230,12 @@ LABEL_SCHEMA = {
     "properties": {"label": {"type": "string", "enum": ["APPROVE", "REQUEST_CHANGES"]}},
     "required": ["label"],
     "additionalProperties": False,
+}
+
+EXPERIMENT_CONDITIONS = {
+    "verifier_only",
+    "fixed_reviewer",
+    "coevolving_reviewer",
 }
 
 
@@ -258,6 +312,7 @@ class CodingTaskEvaluator:
     crave_validation: list[dict[str, Any]]
     random_seed: int
     repair_attempts: int = 1
+    fixed_evaluator: EvaluatorCandidate | None = None
 
     def _task_material(self, task: PolyglotTask) -> dict[str, Any]:
         return task_material(task)
@@ -542,6 +597,7 @@ class CodingTaskEvaluator:
                 },
             )
         if task.task_id == "coder-learned-review":
+            evaluator = evaluator or self.fixed_evaluator
             if evaluator is None:
                 raise RuntimeError("learned reviewer task has no frozen evaluator")
             try:
@@ -661,6 +717,17 @@ class ChallengerSource:
 
 
 @dataclass(slots=True)
+class NoChallengers:
+    """Explicit fixed-evaluator baseline: no candidate can enter an election."""
+
+    async def challengers(
+        self, slot: EvaluatorSlot, archive: Sequence[WorkspaceNode]
+    ) -> Sequence[EvaluatorCandidate]:
+        del slot, archive
+        return ()
+
+
+@dataclass(slots=True)
 class PrivateCraveAnchors:
     rows: list[dict[str, Any]]
     provider_id: str = "TuringEnterprises/CRAVE:test-withheld"
@@ -684,19 +751,15 @@ class BatchedAnchorEvaluator:
     client: CodexCli
     provider: PrivateCraveAnchors
     agent_runner: AgentWorkspaceRunner
+    batch_size: int = 20
     predictions: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.batch_size <= 0:
+            raise ValueError("anchor batch size must be positive")
 
     async def _predict(self, candidate: EvaluatorCandidate) -> dict[str, str]:
         examples = await self.provider.examples(candidate.slot_id)
-        prompt = await asyncio.to_thread(
-            self.agent_runner.prompt,
-            candidate.artifact["workspace"],
-            "reviewer",
-            {
-                "examples": [example.artifact for example in examples],
-                "response_contract": "Return a prediction for every id without reordering.",
-            },
-        )
         schema = {
             "type": "object",
             "properties": {
@@ -719,17 +782,34 @@ class BatchedAnchorEvaluator:
             "required": ["predictions"],
             "additionalProperties": False,
         }
-        try:
-            result = await self.client.json(prompt, schema, f"anchor:{candidate.candidate_id}")
-            return {item["id"]: item["label"] for item in result["predictions"]}
-        except (
-            OSError,
-            RuntimeError,
-            subprocess.SubprocessError,
-            ValueError,
-            json.JSONDecodeError,
-        ):
-            return {}
+        predictions: dict[str, str] = {}
+        for start in range(0, len(examples), self.batch_size):
+            batch = examples[start : start + self.batch_size]
+            try:
+                prompt = await asyncio.to_thread(
+                    self.agent_runner.prompt,
+                    candidate.artifact["workspace"],
+                    "reviewer",
+                    {
+                        "examples": [example.artifact for example in batch],
+                        "response_contract": "Return a prediction for every id without reordering.",
+                    },
+                )
+                result = await self.client.json(
+                    prompt,
+                    schema,
+                    f"anchor:{candidate.candidate_id}:batch-{start // self.batch_size}",
+                )
+                predictions.update({item["id"]: item["label"] for item in result["predictions"]})
+            except (
+                OSError,
+                RuntimeError,
+                subprocess.SubprocessError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                continue
+        return predictions
 
     async def evaluate(self, candidate: EvaluatorCandidate, example: AnchorExample) -> int:
         if candidate.candidate_id not in self.predictions:
@@ -756,15 +836,6 @@ class TrainingFeedback:
             example_id = f"train-{self.index % len(self.rows)}"
             self.index += 1
             selected.append((example_id, row))
-        prompt = await asyncio.to_thread(
-            self.coding_evaluator.agent_runner.prompt,
-            node.workspace,
-            "reviewer",
-            {
-                "examples": [review_example(example_id, row) for example_id, row in selected],
-                "response_contract": "Return a prediction for every id without reordering.",
-            },
-        )
         schema = {
             "type": "object",
             "properties": {
@@ -790,6 +861,17 @@ class TrainingFeedback:
         reviewer_feedback: list[dict[str, Any]] = []
         if selected:
             try:
+                prompt = await asyncio.to_thread(
+                    self.coding_evaluator.agent_runner.prompt,
+                    node.workspace,
+                    "reviewer",
+                    {
+                        "examples": [
+                            review_example(example_id, row) for example_id, row in selected
+                        ],
+                        "response_contract": "Return a prediction for every id without reordering.",
+                    },
+                )
                 result = await self.client.json(
                     prompt,
                     schema,
@@ -834,9 +916,50 @@ class TrainingFeedback:
         }
 
 
+def condition_components(
+    condition: str, incumbent: EvaluatorCandidate
+) -> tuple[
+    list[RoleTask],
+    list[EvaluatorSlot],
+    EvaluatorCandidate | None,
+    ChallengerSource | NoChallengers,
+    bool,
+]:
+    if condition not in EXPERIMENT_CONDITIONS:
+        raise ValueError(f"unknown experiment condition: {condition}")
+    if condition == "verifier_only":
+        return (
+            [RoleTask("coder", "coder-polyglot-tests", "fixed")],
+            [],
+            None,
+            NoChallengers(),
+            False,
+        )
+    shared_tasks = [
+        RoleTask("coder", "coder-polyglot-tests", "fixed"),
+        RoleTask(
+            "coder",
+            "coder-learned-review",
+            "learned" if condition == "coevolving_reviewer" else "fixed",
+            "code-reviewer" if condition == "coevolving_reviewer" else None,
+        ),
+        RoleTask("reviewer", "reviewer-crave-validation", "fixed"),
+    ]
+    if condition == "fixed_reviewer":
+        return shared_tasks, [], incumbent, NoChallengers(), True
+    return (
+        shared_tasks,
+        [EvaluatorSlot("code-reviewer", "reviewer", incumbent)],
+        None,
+        ChallengerSource(),
+        True,
+    )
+
+
 def build_engine(
     config: dict[str, Any], client: CodexCli
 ) -> tuple[RQGM, CodingTaskEvaluator, list[PolyglotTask]]:
+    condition = config.get("experiment_condition", "coevolving_reviewer")
     seed = int(config["random_seed"])
     coder_train_tasks, validation_tasks, heldout_tasks = split_balanced(
         POLYGLOT,
@@ -855,15 +978,6 @@ def build_engine(
     agent_runner = AgentWorkspaceRunner(
         int(config["agent_timeout_seconds"]), config.get("agent_image", "python:3.12-slim")
     )
-    task_evaluator = CodingTaskEvaluator(
-        client,
-        DockerPolyglotRunner(int(config["container_timeout_seconds"]), images),
-        agent_runner,
-        validation_tasks,
-        crave_validation,
-        seed + 4,
-        int(config["coder_repair_attempts"]),
-    )
     initial_workspace = seed_workspace()
     validate_workspace(initial_workspace)
     incumbent = EvaluatorCandidate.create(
@@ -872,24 +986,38 @@ def build_engine(
         source="seed",
         candidate_id="reviewer-seed",
     )
+    tasks, slots, fixed_evaluator, challenger_source, reviewer_training = condition_components(
+        condition, incumbent
+    )
+    task_evaluator = CodingTaskEvaluator(
+        client,
+        DockerPolyglotRunner(int(config["container_timeout_seconds"]), images),
+        agent_runner,
+        validation_tasks,
+        crave_validation,
+        seed + 4,
+        int(config["coder_repair_attempts"]),
+        fixed_evaluator,
+    )
     engine = RQGM(
         seed_workspace=initial_workspace,
-        tasks=[
-            RoleTask("coder", "coder-polyglot-tests", "fixed"),
-            RoleTask("coder", "coder-learned-review", "learned", "code-reviewer"),
-            RoleTask("reviewer", "reviewer-crave-validation", "fixed"),
-        ],
-        slots=[EvaluatorSlot("code-reviewer", "reviewer", incumbent)],
+        tasks=tasks,
+        slots=slots,
         runtime=Runtime(
             editor=WorkspaceEditor(client, agent_runner),
             task_evaluator=task_evaluator,
-            challenger_source=ChallengerSource(),
+            challenger_source=challenger_source,
             anchor_provider=provider,
-            anchor_evaluator=BatchedAnchorEvaluator(client, provider, agent_runner),
+            anchor_evaluator=BatchedAnchorEvaluator(
+                client,
+                provider,
+                agent_runner,
+                int(config.get("anchor_batch_size", len(crave_anchors))),
+            ),
             training_feedback=TrainingFeedback(
                 client,
                 crave_train,
-                int(config["training_samples_per_node"]),
+                int(config["training_samples_per_node"]) if reviewer_training else 0,
                 task_evaluator,
                 coder_train_tasks,
                 int(config["coder_training_samples_per_node"]),
@@ -948,8 +1076,32 @@ async def execute(config_path: Path) -> None:
             "macro_average": sum(language_rates) / len(language_rates),
             "outcomes": outcomes,
         }
+    token_fields = (
+        "input_tokens",
+        "cached_input_tokens",
+        "cache_write_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+        "raw_total_tokens",
+        "blended_tokens",
+    )
+    token_totals = {
+        field: sum(int(call.get(field, 0)) for call in client.calls) for field in token_fields
+    }
+    token_totals["metered_calls"] = sum("raw_total_tokens" in call for call in client.calls)
+    token_totals["unmetered_calls"] = len(client.calls) - token_totals["metered_calls"]
+    data_split = {
+        "train": [task.task_id for task in engine.runtime.training_feedback.coder_tasks],
+        "validation": [task.task_id for task in task_evaluator.validation_tasks],
+        "heldout": [task.task_id for task in heldout_tasks],
+    }
     summary = {
         "claim": config["claim"],
+        "experiment_condition": config.get("experiment_condition", "coevolving_reviewer"),
+        "ablation_id": config.get("ablation_id"),
+        "source": source_identity(),
+        "config_fingerprint": canonical_hash(config),
+        "data_split_fingerprint": canonical_hash(data_split),
         "result": asdict(result),
         "anchor_provider": {
             "provider_id": engine.runtime.anchor_provider.provider_id,
@@ -957,6 +1109,7 @@ async def execute(config_path: Path) -> None:
             "fingerprint": engine.runtime.anchor_provider.fingerprint,
         },
         "model_calls": client.calls,
+        "token_totals": token_totals,
         "heldout": heldout,
         "polyglot": {
             "languages": ["cpp", "go", "java", "javascript", "python", "rust"],
