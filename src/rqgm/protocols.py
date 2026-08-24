@@ -73,6 +73,10 @@ class AnchorEvaluator(Protocol):
     ) -> int: ...
 
 
+class ProgressObserver(Protocol):
+    async def update(self, engine: Any, event: str) -> None: ...
+
+
 @dataclass(slots=True)
 class Runtime:
     editor: WorkspaceEditor
@@ -81,6 +85,7 @@ class Runtime:
     anchor_provider: AnchorProvider
     anchor_evaluator: AnchorEvaluator
     training_feedback: TrainingFeedback | None = None
+    progress_observer: ProgressObserver | None = None
 
 
 @dataclass(slots=True)

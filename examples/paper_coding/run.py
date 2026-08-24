@@ -45,7 +45,7 @@ from rqgm import (
     Runtime,
 )
 from rqgm.models import WorkspaceNode
-from rqgm.persistence import save_state
+from rqgm.persistence import restore_state, save_state
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data" / "paper-coding"
@@ -55,6 +55,16 @@ POLYGLOT = ROOT / "data" / "polyglot-benchmark"
 def canonical_hash(value: object) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def atomic_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+        json.dump(value, stream, indent=2, sort_keys=True)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
 
 
 def source_identity() -> dict[str, Any]:
@@ -147,7 +157,29 @@ class CodexCli:
     model: str
     timeout: int
     workdir: Path
+    ledger_path: Path | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.ledger_path is None or not self.ledger_path.exists():
+            return
+        for line in self.ledger_path.read_text(encoding="utf-8").splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                self.calls.append(event)
+
+    def _record_call(self, event: dict[str, Any]) -> None:
+        self.calls.append(event)
+        if self.ledger_path is None:
+            return
+        self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.ledger_path.open("a", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(event, sort_keys=True) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
 
     async def json(self, prompt: str, schema: dict[str, Any], purpose: str) -> dict[str, Any]:
         return await asyncio.to_thread(self._json_sync, prompt, schema, purpose)
@@ -215,7 +247,7 @@ class CodexCli:
                 )
                 if token_match:
                     event["raw_total_tokens"] = int(token_match.group(1).replace(",", ""))
-            self.calls.append(event)
+            self._record_call(event)
             print(f"[model:done] {purpose} rc={completed.returncode}", flush=True)
             if completed.returncode != 0 or not output_path.exists():
                 raise RuntimeError(
@@ -916,6 +948,49 @@ class TrainingFeedback:
         }
 
 
+@dataclass(slots=True)
+class RunSnapshotObserver:
+    state_path: Path
+    progress_path: Path
+    interval: int = 8
+    prior_wall_seconds: float = 0.0
+    attempt_started: float = field(default_factory=time.monotonic)
+
+    def active_wall_seconds(self) -> float:
+        return self.prior_wall_seconds + time.monotonic() - self.attempt_started
+
+    async def update(self, engine: RQGM, event: str) -> None:
+        should_save = event in {"initialized", "checkpoint", "completed"} or (
+            event == "evaluated" and engine.validation_outcomes % self.interval == 0
+        )
+        if should_save:
+            await asyncio.to_thread(save_state, engine, self.state_path)
+            await asyncio.to_thread(
+                atomic_json,
+                self.progress_path,
+                {
+                    "active_wall_seconds": self.active_wall_seconds(),
+                    "validation_outcomes": engine.validation_outcomes,
+                },
+            )
+            print(
+                f"[state:saved] event={event} outcomes={engine.validation_outcomes}",
+                flush=True,
+            )
+
+
+def restore_runtime_progress(engine: RQGM) -> None:
+    feedback = engine.runtime.training_feedback
+    if not isinstance(feedback, TrainingFeedback):
+        return
+    feedback.index = sum(
+        len(item.get("reviewer_samples", []))
+        for items in engine.archive.training_feedback.values()
+        for item in items
+        if isinstance(item, dict)
+    )
+
+
 def condition_components(
     condition: str, incumbent: EvaluatorCandidate
 ) -> tuple[
@@ -1039,9 +1114,55 @@ async def execute(config_path: Path) -> None:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     output = ROOT / config["output"]
     output.mkdir(parents=True, exist_ok=True)
-    client = CodexCli(config["model"], int(config["model_timeout_seconds"]), DATA / "codex-empty")
+    state_path = output / "state.json"
+    metadata_path = output / "run-metadata.json"
+    progress_path = output / "runtime-progress.json"
+    client = CodexCli(
+        config["model"],
+        int(config["model_timeout_seconds"]),
+        DATA / "codex-empty",
+        output / "model-calls.jsonl",
+    )
     engine, task_evaluator, heldout_tasks = build_engine(config, client)
-    started = time.monotonic()
+    prior_wall_seconds = 0.0
+    if progress_path.exists():
+        prior_wall_seconds = float(
+            json.loads(progress_path.read_text(encoding="utf-8"))["active_wall_seconds"]
+        )
+    progress_observer = RunSnapshotObserver(
+        state_path,
+        progress_path,
+        int(config.get("snapshot_interval", 8)),
+        prior_wall_seconds,
+    )
+    engine.runtime.progress_observer = progress_observer
+    data_split = {
+        "train": [task.task_id for task in engine.runtime.training_feedback.coder_tasks],
+        "validation": [task.task_id for task in task_evaluator.validation_tasks],
+        "heldout": [task.task_id for task in heldout_tasks],
+    }
+    run_metadata = {
+        "ablation_id": config.get("ablation_id"),
+        "condition": config.get("experiment_condition", "coevolving_reviewer"),
+        "config_fingerprint": canonical_hash(config),
+        "data_split_fingerprint": canonical_hash(data_split),
+        "anchor_fingerprint": engine.runtime.anchor_provider.fingerprint,
+        "source": source_identity(),
+    }
+    if metadata_path.exists():
+        saved_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if saved_metadata != run_metadata:
+            raise ValueError("run metadata changed; refusing an incommensurate resume")
+    else:
+        atomic_json(metadata_path, run_metadata)
+    if state_path.exists():
+        restore_state(engine, state_path, require_resumable=True)
+        restore_runtime_progress(engine)
+        print(
+            f"[state:restored] outcomes={engine.validation_outcomes} "
+            f"checkpoints={len(engine.checkpoint_events)}",
+            flush=True,
+        )
     result = await engine.run()
     endpoint_ids = {
         "generalist": result.endpoint.node_id,
@@ -1090,11 +1211,6 @@ async def execute(config_path: Path) -> None:
     }
     token_totals["metered_calls"] = sum("raw_total_tokens" in call for call in client.calls)
     token_totals["unmetered_calls"] = len(client.calls) - token_totals["metered_calls"]
-    data_split = {
-        "train": [task.task_id for task in engine.runtime.training_feedback.coder_tasks],
-        "validation": [task.task_id for task in task_evaluator.validation_tasks],
-        "heldout": [task.task_id for task in heldout_tasks],
-    }
     summary = {
         "claim": config["claim"],
         "experiment_condition": config.get("experiment_condition", "coevolving_reviewer"),
@@ -1120,7 +1236,7 @@ async def execute(config_path: Path) -> None:
         },
         "paper_comparison_valid": False,
         "paper_reported_rqgm_endpoint": "119/166",
-        "wall_time_seconds": round(time.monotonic() - started, 3),
+        "wall_time_seconds": round(progress_observer.active_wall_seconds(), 3),
         "limitations": [
             "paper split and production prompts are unpublished",
             "gpt-5.6-sol differs from the paper's GPT-5 low endpoint",
@@ -1131,9 +1247,7 @@ async def execute(config_path: Path) -> None:
             "paper's unpublished exact split",
         ],
     }
-    (output / "summary.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
-    )
+    atomic_json(output / "summary.json", summary)
     save_state(engine, output / "state.json")
     print(json.dumps(summary, indent=2, sort_keys=True))
 

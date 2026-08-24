@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from uuid import uuid4
+from uuid import UUID
 
 import numpy as np
 
@@ -37,6 +37,7 @@ class RQGM:
     archive: Archive = field(init=False)
     slot_map: dict[str, EvaluatorSlot] = field(init=False)
     rng: np.random.Generator = field(init=False, repr=False)
+    initialized: bool = field(init=False, default=False)
     validation_outcomes: int = field(init=False, default=0)
     checkpoint_events: list[CheckpointEvent] = field(init=False, default_factory=list)
 
@@ -46,6 +47,7 @@ class RQGM:
         self.archive = Archive(seed)
         self.slot_map = {slot.slot_id: deepcopy(slot) for slot in self.slots}
         self.rng = np.random.default_rng(self.config.random_seed)
+        self.initialized = False
         self.validation_outcomes = 0
         self.checkpoint_events: list[CheckpointEvent] = []
 
@@ -70,9 +72,15 @@ class RQGM:
         return {slot_id: slot.incumbent for slot_id, slot in self.slot_map.items()}
 
     async def run(self) -> RunResult:
-        await self._collect_training_feedback(self.archive.nodes[self.seed_node_id])
+        if not self.initialized:
+            await self._collect_training_feedback(self.archive.nodes[self.seed_node_id])
+            self.initialized = True
+            await self._notify_progress("initialized")
         checkpoints = self.config.resolved_checkpoints
-        checkpoint_index = 0
+        completed = tuple(event.checkpoint for event in self.checkpoint_events)
+        if completed != checkpoints[: len(completed)]:
+            raise ValueError("restored checkpoint history is not a prefix of the schedule")
+        checkpoint_index = len(completed)
 
         while self.validation_outcomes < self.config.validation_budget:
             next_boundary = (
@@ -85,6 +93,7 @@ class RQGM:
                 await self._checkpoint(next_boundary)
                 checkpoint_index += 1
 
+        await self._notify_progress("completed")
         roles = sorted({task.role_id for task in self.tasks})
         return RunResult(
             validation_outcomes=self.validation_outcomes,
@@ -95,6 +104,25 @@ class RQGM:
             epoch_vector=self.epoch_vector,
             checkpoints=list(self.checkpoint_events),
             archive_size=len(self.archive.nodes),
+        )
+
+    async def _notify_progress(self, event: str) -> None:
+        if self.runtime.progress_observer is not None:
+            await self.runtime.progress_observer.update(self, event)
+
+    def _new_id(self) -> str:
+        return str(UUID(bytes=self.rng.bytes(16), version=4))
+
+    @staticmethod
+    def _workspace_view(node: WorkspaceNode) -> WorkspaceNode:
+        """Copy only proposer-visible state, excluding potentially large validation caches."""
+        return WorkspaceNode(
+            node_id=node.node_id,
+            workspace=deepcopy(node.workspace),
+            parent_id=node.parent_id,
+            created_at_step=node.created_at_step,
+            valid=node.valid,
+            training_feedback=deepcopy(node.training_feedback),
         )
 
     async def _run_epoch_until(self, boundary: int) -> None:
@@ -110,20 +138,21 @@ class RQGM:
     async def _expand_once(self) -> None:
         parent = self.archive.sample_node_by_cmp(self.rng)
         workspace = await self.runtime.editor.edit(
-            deepcopy(parent),
-            tuple(deepcopy(node) for node in self.archive.nodes.values()),
+            self._workspace_view(parent),
+            tuple(self._workspace_view(node) for node in self.archive.nodes.values()),
             self.config.expansion_budget,
         )
         if workspace is None:
             return
         child = WorkspaceNode(
-            node_id=str(uuid4()),
+            node_id=self._new_id(),
             workspace=workspace,
             parent_id=parent.node_id,
             created_at_step=self.validation_outcomes,
         )
         self.archive.add_node(child)
         await self._collect_training_feedback(child)
+        await self._notify_progress("expanded")
 
     async def _collect_training_feedback(self, node: WorkspaceNode) -> None:
         if self.runtime.training_feedback is None:
@@ -159,7 +188,7 @@ class RQGM:
             node.cached_artifacts[outcome.artifact_key] = outcome.artifact
         self.archive.add_record(
             UtilityRecord(
-                record_id=str(uuid4()),
+                record_id=self._new_id(),
                 node_id=node.node_id,
                 role_id=task.role_id,
                 task_id=task.task_id,
@@ -172,6 +201,7 @@ class RQGM:
             )
         )
         self.validation_outcomes += 1
+        await self._notify_progress("evaluated")
 
     async def _score_candidate(
         self,
@@ -207,7 +237,7 @@ class RQGM:
             challengers = tuple(
                 await self.runtime.challenger_source.challengers(
                     deepcopy(slot),
-                    tuple(deepcopy(node) for node in self.archive.nodes.values()),
+                    tuple(self._workspace_view(node) for node in self.archive.nodes.values()),
                 )
             )
             unique: dict[str, EvaluatorCandidate] = {slot.incumbent.candidate_id: slot.incumbent}
@@ -267,3 +297,4 @@ class RQGM:
                 anchor_scores=score_log,
             )
         )
+        await self._notify_progress("checkpoint")

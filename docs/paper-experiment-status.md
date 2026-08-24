@@ -42,6 +42,13 @@ tasks, records Codex raw/blended tokens, and enforces identical data and anchor
 fingerprints across all six cells. These remain intermediate public
 reconstruction experiments, not the paper's unpublished exact split.
 
+Registered long runs use resumable state version 2. The snapshot includes the
+search RNG and exact checkpoint prefix, is written by atomic replacement every
+eight validation outcomes, and is accepted for continuation only under the
+same code/config/data/anchor identity. Model-call accounting uses a separate
+append-only ledger. This is an engineering reliability mechanism; it does not
+change the RQGM validation budget or evaluator replacement rule.
+
 ## What is exact, reconstructed, and approximate
 
 | Component | Status | Notes |

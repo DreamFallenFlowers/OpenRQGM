@@ -54,6 +54,14 @@ def test_codex_jsonl_token_usage_is_recorded_in_both_metrics() -> None:
     assert usage["blended_tokens"] == 150
 
 
+def test_model_call_ledger_survives_process_restart(tmp_path) -> None:
+    ledger = tmp_path / "model-calls.jsonl"
+    first = MODULE.CodexCli("test-model", 1, tmp_path, ledger)
+    first._record_call({"purpose": "one", "raw_total_tokens": 3})
+    second = MODULE.CodexCli("test-model", 1, tmp_path, ledger)
+    assert second.calls == [{"purpose": "one", "raw_total_tokens": 3}]
+
+
 def test_challenger_source_skips_incumbent_artifact() -> None:
     incumbent_workspace = MODULE.seed_workspace()
     incumbent = MODULE.EvaluatorCandidate.create(

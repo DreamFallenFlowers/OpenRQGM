@@ -126,9 +126,10 @@ def preflight_matrix() -> dict[str, Any]:
     }
 
 
-def assert_fresh_output(config: dict[str, Any]) -> None:
+def assert_available_output(config: dict[str, Any]) -> None:
     output = ROOT / config["output"]
-    if (output / "summary.json").exists() or (output / "state.json").exists():
+    summary = output / "summary.json"
+    if summary.exists() and summary.stat().st_size > 0:
         raise FileExistsError(f"refusing to overwrite completed run: {output}")
 
 
@@ -154,7 +155,7 @@ async def run_cells(selected: list[tuple[int, str]]) -> None:
     matrix = load_matrix()
     for cell in selected:
         config = matrix[cell]
-        assert_fresh_output(config)
+        assert_available_output(config)
         print(f"[ablation:start] budget={cell[0]} condition={cell[1]}", flush=True)
         await execute(config_path(*cell))
         state = ROOT / config["output"] / "state.json"

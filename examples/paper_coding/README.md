@@ -131,6 +131,16 @@ $env:PYTHONPATH=(Resolve-Path src)
 PowerShell launcher intentionally starts only one cell at a time. Every
 completed cell is automatically checked by the structural RQGM state auditor.
 
+Long cells save an atomic `state.json` every eight validation outcomes and at
+every evaluator checkpoint. Re-running the same registered cell restores the
+archive, evaluator epochs, checkpoint history, RNG state, initialization state,
+and domain training cursor. Model-call usage is appended independently to
+`model-calls.jsonl`, so calls spent immediately before a crash remain visible in
+the final cost. A resume is rejected if the source commit, configuration, data
+split, or private-anchor fingerprint changed. Proposer views omit validation
+artifact caches, which reduces archive-copy memory pressure without removing
+the lineage training feedback allowed by the algorithm.
+
 ## Comparability
 
 The paper reports 119/166 held-out Polyglot tasks for both its specialist and
