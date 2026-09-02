@@ -23,20 +23,33 @@ def test_run_limits_become_oci_rlimits() -> None:
             "0.5",
             "--pids-limit",
             "64",
+            "--network",
+            "none",
             "python:3.12-slim",
         ]
     )
     assert "--memory" not in translated
     assert "--cpus" not in translated
     assert "--pids-limit" not in translated
-    assert "as=268435456:268435456" in translated
+    assert "rss=268435456:268435456" in translated
     assert "nproc=64:64" in translated
+    assert "--cgroups=disabled" in translated
+    assert "--network" in translated
+    assert translated[translated.index("--network") + 1] == "host"
+    assert any(value.startswith("seccomp=") for value in translated)
 
 
-def test_non_run_commands_are_unchanged() -> None:
+def test_build_uses_chroot_isolation() -> None:
     assert MODULE.translate(["build", "-t", "image", "."]) == [
         "build",
+        "--isolation",
+        "chroot",
+        "--layers",
         "-t",
         "image",
         ".",
     ]
+
+
+def test_non_run_or_build_commands_are_unchanged() -> None:
+    assert MODULE.translate(["images"]) == ["images"]

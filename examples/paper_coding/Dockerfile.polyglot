@@ -1,8 +1,11 @@
 FROM ubuntu:24.04 AS native
-RUN sed -i \
-    -e 's|http://archive.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
-    -e 's|http://security.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
-    /etc/apt/sources.list.d/ubuntu.sources \
+ARG UBUNTU_MIRROR=""
+RUN if [ -n "$UBUNTU_MIRROR" ]; then \
+      sed -i \
+        -e "s|http://archive.ubuntu.com/ubuntu|$UBUNTU_MIRROR|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|$UBUNTU_MIRROR|g" \
+        /etc/apt/sources.list.d/ubuntu.sources; \
+    fi \
     && apt-get update \
     && apt-get install -y --no-install-recommends cmake g++ make golang-go python3 python3-pytest \
     && rm -rf /var/lib/apt/lists/*
