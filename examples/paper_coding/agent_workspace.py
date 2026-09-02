@@ -149,7 +149,10 @@ class AgentWorkspaceRunner:
                 "-w",
                 "/agent",
                 self.image,
-                "python3",
+                "/bin/sh",
+                "-c",
+                "ulimit -v 262144; ulimit -u 64; exec python3 \"$1\"",
+                "openrqgm-agent",
                 workspace["entrypoint"],
             ]
             completed = subprocess.run(
