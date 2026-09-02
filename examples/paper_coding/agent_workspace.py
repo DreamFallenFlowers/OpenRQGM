@@ -118,6 +118,7 @@ class AgentWorkspaceRunner:
             raise ValueError(operation)
         with tempfile.TemporaryDirectory(prefix="openrqgm-agent-") as temp:
             root = Path(temp)
+            root.chmod(0o755)
             for relative, content in workspace["files"].items():
                 target = root.joinpath(*safe_relative(relative).parts)
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -141,7 +142,7 @@ class AgentWorkspaceRunner:
                 "--security-opt",
                 "no-new-privileges",
                 "--user",
-                "65534:65534",
+                "60000:60000",
                 "--tmpfs",
                 "/tmp:rw,noexec,nosuid,size=32m",
                 "-v",

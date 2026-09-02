@@ -194,6 +194,9 @@ class DockerPolyglotRunner:
             for relative, content in replacements.items():
                 target = copied.joinpath(*safe_relative(relative).parts)
                 target.write_text(content, encoding="utf-8")
+            copied.chmod(copied.stat().st_mode | 0o222)
+            for path in copied.rglob("*"):
+                path.chmod(path.stat().st_mode | 0o222)
             command = [
                 "docker",
                 "run",
@@ -207,6 +210,8 @@ class DockerPolyglotRunner:
                 "1",
                 "--pids-limit",
                 "256",
+                "--user",
+                "60002:60002",
                 "--cap-drop",
                 "ALL",
                 "--security-opt",

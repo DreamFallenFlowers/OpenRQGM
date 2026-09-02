@@ -68,6 +68,7 @@ class DockerLiveCodeBenchRunner:
     def run(self, task: LiveCodeBenchTask, code: str) -> tuple[int, dict[str, Any]]:
         with tempfile.TemporaryDirectory(prefix="openrqgm-livecodebench-") as temp:
             root = Path(temp)
+            root.chmod(0o755)
             (root / "request.json").write_text(
                 json.dumps(
                     {"sample": task.evaluation_sample, "code": code, "timeout": 6},
@@ -88,6 +89,8 @@ class DockerLiveCodeBenchRunner:
                 "1",
                 "--pids-limit",
                 "128",
+                "--user",
+                "60001:60001",
                 "-e",
                 "OPENRQGM_MEMORY_BYTES=4294967296",
                 "-e",
