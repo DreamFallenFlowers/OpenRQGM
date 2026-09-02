@@ -45,6 +45,10 @@ FILES_SCHEMA = {
 }
 
 
+class PublicSuiteModelError(Exception):
+    """Abort a resumable run instead of recording API failures as wrong answers."""
+
+
 def append_jsonl(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as stream:
@@ -93,7 +97,17 @@ async def generate(
             "response_contract": "Return complete contents for editable files only.",
         },
     )
-    result = await client.json(prompt, FILES_SCHEMA, purpose)
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            result = await client.json(prompt, FILES_SCHEMA, purpose)
+            break
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            last_error = error
+            if attempt < 2:
+                await asyncio.sleep(30 * (2**attempt))
+    else:
+        raise PublicSuiteModelError(f"model call failed after retries: {purpose}") from last_error
     return replacements_from_json(result["files"])
 
 
