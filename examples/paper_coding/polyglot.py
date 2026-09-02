@@ -87,6 +87,34 @@ def split_balanced(
     return train, validation, test
 
 
+def split_counts(
+    root: Path,
+    seed: int,
+    train_count: int,
+    validation_count: int,
+    test_count: int,
+) -> tuple[list[PolyglotTask], list[PolyglotTask], list[PolyglotTask]]:
+    """Create a deterministic global split with paper-reported cardinalities.
+
+    The paper does not publish task identities.  ``discover_tasks`` shuffles
+    independently within each language and interleaves languages round-robin,
+    so taking a global prefix is a preregistered, approximately balanced public
+    replacement without inventing an unavailable exact split.
+    """
+
+    counts = (train_count, validation_count, test_count)
+    if any(count < 0 for count in counts):
+        raise ValueError("split counts must be non-negative")
+    tasks = discover_tasks(root, seed)
+    required = sum(counts)
+    if len(tasks) < required:
+        raise ValueError(f"Polyglot has {len(tasks)} tasks, need {required}")
+    train_end = train_count
+    validation_end = train_end + validation_count
+    test_end = validation_end + test_count
+    return tasks[:train_end], tasks[train_end:validation_end], tasks[validation_end:test_end]
+
+
 def editable_files(task: PolyglotTask) -> list[Path]:
     root = task.path
     if task.language == "python":

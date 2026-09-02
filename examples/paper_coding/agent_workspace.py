@@ -35,13 +35,49 @@ functions = {"coder": coder, "repair": repair, "reviewer": reviewer}
 print(json.dumps({"prompt": functions[operation](request["context"])}, ensure_ascii=False))
 """
 
+PAPER_V2_SEED_AGENT = r'''import json, sys
 
-def seed_workspace() -> dict[str, Any]:
+def shared(context, output_format):
+    return ("You are an agent.\nTask input:\n```\n" +
+            json.dumps(context, ensure_ascii=False) +
+            "\n```\n" + output_format)
+
+def coder(context):
+    return shared(
+        context,
+        "Solve the coding task. Return complete contents for only the editable files.",
+    )
+
+def repair(context):
+    return shared(
+        context,
+        "Repair the candidate from the supplied execution feedback. "
+        "Return complete contents for only the editable files.",
+    )
+
+def reviewer(context):
+    return shared(
+        context,
+        "Review the supplied patch and return only APPROVE or REQUEST_CHANGES "
+        "for every requested id.",
+    )
+
+request = json.load(sys.stdin)
+operation = request["operation"]
+functions = {"coder": coder, "repair": repair, "reviewer": reviewer}
+print(json.dumps({"prompt": functions[operation](request["context"])}, ensure_ascii=False))
+'''
+
+
+def seed_workspace(profile: str = "reconstruction_v3") -> dict[str, Any]:
+    if profile not in {"reconstruction_v3", "paper_v2_minimal"}:
+        raise ValueError(f"unknown seed workspace profile: {profile}")
+    agent = PAPER_V2_SEED_AGENT if profile == "paper_v2_minimal" else SEED_AGENT
     return {
         "format": "openrqgm-agent-codebase-v1",
         "entrypoint": "agent.py",
         "files": {
-            "agent.py": SEED_AGENT,
+            "agent.py": agent,
             "README.md": (
                 "Sandboxed prompt-building agent. JSON stdin/stdout protocol: "
                 "coder, repair, reviewer."

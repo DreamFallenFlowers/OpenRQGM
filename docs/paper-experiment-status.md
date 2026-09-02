@@ -54,10 +54,10 @@ change the RQGM validation budget or evaluator replacement rule.
 | Component | Status | Notes |
 |---|---|---|
 | Algorithm 1 search/control flow | Exact to published pseudocode | CMP, UCB-Air, binary budget, checkpoints, frozen evaluators, anchor replacement, and selective erasure are in the core package. |
-| Reported paper-scale settings | Recorded | `configs/paper_full.json` records 12,288 outcomes, GPT-5 low, alpha 0.6, epsilon 0.05, three training samples per node, the power-of-two checkpoint ratio, and the 10/49/166 split sizes. The first checkpoint is inherited from HGM and not specified in the RQGM paper. |
+| Reported paper-scale settings | Recorded | `configs/paper_full.json` records the v2 settings: 12,288 outcomes, GPT-5.5 low, alpha 0.6, epsilon 0.05, three training samples per node, the power-of-two checkpoint ratio, and the 10/49/166 split sizes. The first checkpoint is not specified in the RQGM paper. |
 | Polyglot task source | Public reconstruction | Official Aider repository pinned locally at commit `7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f`. The paper's exact task split is unpublished. |
 | CRAVE reviewer anchor | Public reconstruction | Deterministic withheld sample of the public CRAVE test split; exact paper sample is unpublished. |
-| Model and prompts | Approximation | Pilot uses authenticated `gpt-5.6-sol`; the paper used GPT-5 low and does not publish production prompts/provider revision. |
+| Model and prompts | Approximation | Earlier pilots use authenticated `gpt-5.6-sol`; the paper-matched v2 profile uses GPT-5.5 low. Appendix C.5 publishes the shared seed template and meta-agent instruction, but not every complete role prompt, provider revision, or production harness. |
 | Execution harness | Public reconstruction | Six isolated language images run the official public Aider commands for C++, Go, Java, JavaScript, Python, and Rust. This is still not the paper's unpublished production harness. |
 | Anchor inference | Approximation | Examples are classified in a batch per evaluator candidate to reduce model-call overhead. Binary outcomes are still recorded per example. |
 
@@ -96,7 +96,7 @@ first execution preserved at `runs/paper-coding-pilot-attempt1`.
 1. Obtain the authors' exact 10/49/166 Polyglot split and 100-example CRAVE
    anchor, or publish a preregistered replacement split under a new result name.
 2. Implement and pin all six language containers and the exact test commands.
-3. Match GPT-5 low, prompts, tool limits, timeout rules, and model-provider
+3. Match GPT-5.5 low, the published prompt portions, tool limits, timeout rules, and model-provider
    revision as closely as the released information permits.
 4. Run all 12,288 binary validation outcomes for each headline condition and
    multiple seeds, logging model tokens, cost, wall time, and failures.

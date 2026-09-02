@@ -148,3 +148,25 @@ generalist RQGM endpoints. A result from `pilot.json` is a mechanics-and-domain
 integration pilot and must not be compared numerically with 119/166. A valid
 headline comparison requires all six languages, 12,288 binary validation
 outcomes per run, the authors' exact split/harness, and repeated runs.
+
+## Paper-matched public v2 profile
+
+`configs/paper_matched_v2_rqgm.json` and
+`configs/paper_matched_v2_hgm_h.json` track the settings disclosed in
+arXiv:2606.26294v2: GPT-5.5 low, 12,288 outcomes, alpha 0.6, epsilon 0.05,
+three training samples, a ratio-two checkpoint schedule, a 100-example CRAVE
+anchor, and Polyglot split cardinalities 10/49/166. The two manifests are
+matched except for the RQGM-versus-HGM-H condition and output metadata.
+
+Before spending model tokens, run:
+
+```powershell
+$env:PYTHONPATH=(Resolve-Path src)
+.\.venv\Scripts\python.exe examples\paper_coding\preflight_paper_matched.py
+```
+
+The preflight verifies both manifests, constructs the deterministic public
+replacement split, checks disjointness and exact cardinalities, and inspects
+all six language images. See `docs/paper-matched-v2.md` for the remaining
+non-public assets and adapter differences that keep `paper_comparison_valid`
+false.

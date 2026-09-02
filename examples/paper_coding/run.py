@@ -29,6 +29,7 @@ from polyglot import (
     PolyglotTask,
     replacements_from_json,
     split_balanced,
+    split_counts,
 )
 from polyglot import (
     material as task_material,
@@ -158,6 +159,7 @@ class CodexCli:
     timeout: int
     workdir: Path
     ledger_path: Path | None = None
+    reasoning_effort: str | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -211,6 +213,10 @@ class CodexCli:
                 "--json",
                 "-m",
                 self.model,
+            ]
+            if self.reasoning_effort:
+                command.extend(["-c", f'model_reasoning_effort="{self.reasoning_effort}"'])
+            command.extend([
                 "-C",
                 str(self.workdir),
                 "--output-schema",
@@ -218,7 +224,7 @@ class CodexCli:
                 "-o",
                 str(output_path),
                 "-",
-            ]
+            ])
             print(f"[model:start] {purpose}", flush=True)
             started = time.monotonic()
             completed = subprocess.run(
@@ -234,6 +240,7 @@ class CodexCli:
             event = {
                 "purpose": purpose,
                 "model": self.model,
+                "reasoning_effort": self.reasoning_effort,
                 "returncode": completed.returncode,
                 "prompt_sha256": canonical_hash(prompt),
                 "elapsed_seconds": round(time.monotonic() - started, 3),
@@ -1036,14 +1043,29 @@ def build_engine(
 ) -> tuple[RQGM, CodingTaskEvaluator, list[PolyglotTask]]:
     condition = config.get("experiment_condition", "coevolving_reviewer")
     seed = int(config["random_seed"])
-    coder_train_tasks, validation_tasks, heldout_tasks = split_balanced(
-        POLYGLOT,
-        seed,
-        int(config["polyglot_train_tasks_per_language"]),
-        int(config["polyglot_validation_tasks_per_language"]),
-        int(config["polyglot_test_tasks_per_language"]),
+    if "polyglot_train_tasks" in config:
+        coder_train_tasks, validation_tasks, heldout_tasks = split_counts(
+            POLYGLOT,
+            seed,
+            int(config["polyglot_train_tasks"]),
+            int(config["polyglot_validation_tasks"]),
+            int(config["polyglot_test_tasks"]),
+        )
+    else:
+        coder_train_tasks, validation_tasks, heldout_tasks = split_balanced(
+            POLYGLOT,
+            seed,
+            int(config["polyglot_train_tasks_per_language"]),
+            int(config["polyglot_validation_tasks_per_language"]),
+            int(config["polyglot_test_tasks_per_language"]),
+        )
+    crave_train_rows = load_rows("train")
+    crave_train_count = config.get("crave_training_pool_examples", 32)
+    crave_train = (
+        sample_rows(crave_train_rows, len(crave_train_rows), seed + 1)
+        if crave_train_count == "all"
+        else sample_rows(crave_train_rows, int(crave_train_count), seed + 1)
     )
-    crave_train = sample_rows(load_rows("train"), 32, seed + 1)
     crave_validation = sample_rows(
         load_rows("validation"), int(config["crave_validation_examples"]), seed + 2
     )
@@ -1053,7 +1075,7 @@ def build_engine(
     agent_runner = AgentWorkspaceRunner(
         int(config["agent_timeout_seconds"]), config.get("agent_image", "python:3.12-slim")
     )
-    initial_workspace = seed_workspace()
+    initial_workspace = seed_workspace(config.get("seed_workspace_profile", "reconstruction_v3"))
     validate_workspace(initial_workspace)
     incumbent = EvaluatorCandidate.create(
         "code-reviewer",
@@ -1122,6 +1144,7 @@ async def execute(config_path: Path) -> None:
         int(config["model_timeout_seconds"]),
         DATA / "codex-empty",
         output / "model-calls.jsonl",
+        config.get("reasoning_effort"),
     )
     engine, task_evaluator, heldout_tasks = build_engine(config, client)
     prior_wall_seconds = 0.0
@@ -1237,15 +1260,15 @@ async def execute(config_path: Path) -> None:
         "paper_comparison_valid": False,
         "paper_reported_rqgm_endpoint": "119/166",
         "wall_time_seconds": round(progress_observer.active_wall_seconds(), 3),
-        "limitations": [
-            "paper split and production prompts are unpublished",
-            "gpt-5.6-sol differs from the paper's GPT-5 low endpoint",
-            "anchor inference is batched as a declared cost-saving approximation",
-            "the meta-agent may modify the complete sandboxed agent codebase but not the "
-            "trusted RQGM engine, private anchors, benchmark data, or sandbox boundary",
-            "public Aider Polyglot tasks are balanced across six languages; this is not the "
-            "paper's unpublished exact split",
-        ],
+        "limitations": config.get(
+            "limitations",
+            [
+                "the paper's exact task identities and production harness are unpublished",
+                "the model provider revision and complete per-role prompts are unavailable",
+                "the public adapter uses bounded generate-test-repair calls instead of "
+                "the paper's exact tool loop",
+            ],
+        ),
     }
     atomic_json(output / "summary.json", summary)
     save_state(engine, output / "state.json")

@@ -13,6 +13,7 @@ from polyglot import (  # noqa: E402
     editable_files,
     safe_relative,
     split_balanced,
+    split_counts,
 )
 
 ROOT = Path(__file__).parents[1]
@@ -24,6 +25,13 @@ def test_balanced_split_contains_six_disjoint_languages() -> None:
     assert {task.language for task in train} == set(LANGUAGES)
     assert {task.language for task in validation} == set(LANGUAGES)
     assert {task.language for task in test} == set(LANGUAGES)
+    ids = [{task.task_id for task in split} for split in (train, validation, test)]
+    assert not (ids[0] & ids[1] or ids[0] & ids[2] or ids[1] & ids[2])
+
+
+def test_global_count_split_matches_paper_cardinalities() -> None:
+    train, validation, test = split_counts(DATA, 7, 10, 49, 166)
+    assert (len(train), len(validation), len(test)) == (10, 49, 166)
     ids = [{task.task_id for task in split} for split in (train, validation, test)]
     assert not (ids[0] & ids[1] or ids[0] & ids[2] or ids[1] & ids[2])
 
