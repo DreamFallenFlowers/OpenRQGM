@@ -9,3 +9,10 @@ foreach ($language in @("cpp", "go", "java", "javascript", "python", "rust")) {
         throw "Failed to build $tag"
     }
 }
+
+$liveCodeBenchTag = "openrqgm-livecodebench:2026-09-02"
+$liveCodeBenchDockerfile = Join-Path $PSScriptRoot "Dockerfile.livecodebench"
+docker build -t $liveCodeBenchTag -f $liveCodeBenchDockerfile $root
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to build $liveCodeBenchTag"
+}

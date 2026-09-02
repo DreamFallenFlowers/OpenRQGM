@@ -170,3 +170,43 @@ replacement split, checks disjointness and exact cardinalities, and inspects
 all six language images. See `docs/paper-matched-v2.md` for the remaining
 non-public assets and adapter differences that keep `paper_comparison_valid`
 false.
+
+## Full public RSI suite
+
+`configs/public_suite_full.json` defines the public replacement suite used for
+OpenRQGM claims. It contains every one of the 225 Aider Polyglot exercises and
+all 1,055 problems in LiveCodeBench `release_v6`'s official default
+`codegeneration_lite` scenario. “Full” refers to task coverage: no problem is
+sampled out, while the official lite dataset prunes redundant per-task tests.
+The 9.38GB `--not_fast` payload is deliberately not claimed. Polyglot remains the search benchmark with the
+preregistered 10/49/166 partition; the full 225-task score is a post-run
+diagnostic. LiveCodeBench is strictly external: no task, test, label, or score
+is used by the meta-agent, training feedback, evaluator proposal, checkpoint
+replacement, or archive selection.
+
+Prepare the pinned snapshot and evaluator image:
+
+```powershell
+git clone https://github.com/LiveCodeBench/LiveCodeBench.git data/LiveCodeBench
+git -C data/LiveCodeBench checkout 28fef95ea8c9f7a547c8329f2cd3d32b92c1fa24
+.\.venv-livecodebench\Scripts\python.exe examples\paper_coding\prepare_livecodebench.py
+.\examples\paper_coding\build-images.ps1
+```
+
+After an RQGM run has produced `state.json` and `summary.json`, run both full
+benchmarks with resumable per-task JSONL outputs:
+
+```powershell
+$env:PYTHONPATH=(Resolve-Path src)
+.\.venv\Scripts\python.exe examples\paper_coding\evaluate_public_suite.py `
+  --config examples\paper_coding\configs\paper_matched_v2_rqgm.json `
+  --state runs\paper-matched-v2-rqgm\state.json `
+  --summary runs\paper-matched-v2-rqgm\summary.json `
+  --output runs\public-suite-rqgm
+```
+
+Generated LiveCodeBench solutions are not persisted; only their hashes and
+scores are recorded. The executable payload stays in ignored local data and
+the Docker evaluator strips hidden inputs and expected outputs from result
+logs. This suite establishes public external validity, not numerical
+comparability with the paper's private production setup.

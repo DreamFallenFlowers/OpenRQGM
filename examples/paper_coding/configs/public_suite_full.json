@@ -1,0 +1,26 @@
+{
+  "suite_id": "openrqgm-public-rsi-suite-v1",
+  "primary_search_benchmark": {
+    "name": "aider_polyglot",
+    "repository_commit": "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f",
+    "problem_count": 225,
+    "search_split": {"train": 10, "validation": 49, "heldout": 166},
+    "external_full_suite": 225,
+    "protocol": "pass@1_ground_truth_blind"
+  },
+  "external_transfer_benchmark": {
+    "name": "livecodebench",
+    "repository_commit": "28fef95ea8c9f7a547c8329f2cd3d32b92c1fa24",
+    "dataset": "livecodebench/code_generation_lite",
+    "release_version": "release_v6",
+    "scenario": "codegeneration",
+    "not_fast": false,
+    "coverage": "all_tasks_official_pruned_test_cases",
+    "problem_count": 1055,
+    "search_feedback_used": false,
+    "protocol": "pass@1"
+  },
+  "paper_comparison_valid": false,
+  "public_method_replication": true,
+  "external_benchmark_validation": true
+}

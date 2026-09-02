@@ -1,0 +1,1 @@
+{"sample":{"input_output":"{\"inputs\":[\"1 2\\n\"],\"outputs\":[\"3\\n\"],\"fn_name\":null}"},"code":"a, b = map(int, input().split())\nprint(a + b)\n","timeout":6}

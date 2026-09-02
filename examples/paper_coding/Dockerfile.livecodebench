@@ -1,0 +1,7 @@
+FROM python:3.10-slim
+
+RUN pip install --no-cache-dir numpy==2.2.6 && mkdir -p /opt/lcb && \
+    python -c "import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/LiveCodeBench/LiveCodeBench/28fef95ea8c9f7a547c8329f2cd3d32b92c1fa24/lcb_runner/evaluation/testing_util.py', '/opt/lcb/testing_util.py')"
+COPY examples/paper_coding/livecodebench_entrypoint.py /opt/lcb/entrypoint.py
+WORKDIR /opt/lcb
+ENTRYPOINT ["python3", "/opt/lcb/entrypoint.py"]
