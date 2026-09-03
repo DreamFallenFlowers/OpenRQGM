@@ -21,13 +21,21 @@ TEST_COMMANDS: dict[str, list[str]] = {
     "java": [
         "bash",
         "-lc",
-        "cp -a /opt/gradle-cache /home/sandbox/.gradle && gradle --no-daemon test",
+        "classes=$(mktemp -d); "
+        "classpath=$(find /opt/gradle-cache -type f -name '*.jar' -print | paste -sd: -); "
+        "console=$(find /opt/gradle-cache -type f "
+        "-name 'junit-platform-console-standalone-*.jar' -print -quit); "
+        "find src/main/java src/test/java -type f -name '*.java' -print0 "
+        "| xargs -0 javac -cp \"$classpath\" -d \"$classes\" && "
+        "java -jar \"$console\" execute --class-path \"$classes:$classpath\" "
+        "--scan-class-path",
     ],
     "javascript": [
         "bash",
         "-lc",
         "ln -s /opt/npm/node_modules node_modules 2>/dev/null || true; "
-        "sed -i 's/\\bxtest(/test(/g; s/\\bxit(/it(/g' *.spec.js; npm run test",
+        "sed -i 's/\\bxtest(/test(/g; s/\\bxit(/it(/g' *.spec.js; "
+        "npm run test -- --runInBand",
     ],
     "python": ["python3", "-m", "pytest", "-q"],
     "rust": ["cargo", "test", "--", "--include-ignored"],

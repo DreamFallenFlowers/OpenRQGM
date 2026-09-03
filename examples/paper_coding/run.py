@@ -153,6 +153,10 @@ def find_codex_executable() -> str:
     raise FileNotFoundError("Codex desktop CLI is not available")
 
 
+class ModelCallError(Exception):
+    """Transient model-service failure that must not become a benchmark outcome."""
+
+
 @dataclass(slots=True)
 class CodexCli:
     model: str
@@ -184,7 +188,16 @@ class CodexCli:
             os.fsync(stream.fileno())
 
     async def json(self, prompt: str, schema: dict[str, Any], purpose: str) -> dict[str, Any]:
-        return await asyncio.to_thread(self._json_sync, prompt, schema, purpose)
+        last_error: ModelCallError | None = None
+        for attempt in range(3):
+            try:
+                return await asyncio.to_thread(self._json_sync, prompt, schema, purpose)
+            except ModelCallError as error:
+                last_error = error
+                if attempt < 2:
+                    await asyncio.sleep(30 * (2**attempt))
+        assert last_error is not None
+        raise last_error
 
     def _json_sync(self, prompt: str, schema: dict[str, Any], purpose: str) -> dict[str, Any]:
         executable = find_codex_executable()
@@ -227,16 +240,32 @@ class CodexCli:
             ])
             print(f"[model:start] {purpose}", flush=True)
             started = time.monotonic()
-            completed = subprocess.run(
-                command,
-                input=prompt,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                capture_output=True,
-                timeout=self.timeout,
-                check=False,
-            )
+            try:
+                completed = subprocess.run(
+                    command,
+                    input=prompt,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    capture_output=True,
+                    timeout=self.timeout,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                self._record_call(
+                    {
+                        "purpose": purpose,
+                        "model": self.model,
+                        "reasoning_effort": self.reasoning_effort,
+                        "returncode": None,
+                        "prompt_sha256": canonical_hash(prompt),
+                        "elapsed_seconds": round(time.monotonic() - started, 3),
+                        "error": "timeout",
+                    }
+                )
+                raise ModelCallError(
+                    f"Codex call timed out for {purpose} after {self.timeout}s"
+                ) from error
             event = {
                 "purpose": purpose,
                 "model": self.model,
@@ -257,11 +286,16 @@ class CodexCli:
             self._record_call(event)
             print(f"[model:done] {purpose} rc={completed.returncode}", flush=True)
             if completed.returncode != 0 or not output_path.exists():
-                raise RuntimeError(
+                raise ModelCallError(
                     f"Codex call failed for {purpose}: rc={completed.returncode}; "
                     f"stderr_tail={completed.stderr[-600:]}"
                 )
-            return json.loads(output_path.read_text(encoding="utf-8"))
+            try:
+                return json.loads(output_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise ModelCallError(
+                    f"Codex returned invalid structured output for {purpose}"
+                ) from error
 
 
 LABEL_SCHEMA = {

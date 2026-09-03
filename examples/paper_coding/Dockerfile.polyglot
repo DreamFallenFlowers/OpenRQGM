@@ -21,7 +21,11 @@ ENV GRADLE_USER_HOME=/opt/gradle-cache
 COPY data/polyglot-benchmark/java/exercises/practice/affine-cipher /tmp/java-cache
 # The benchmark checkout intentionally contains a failing starter solution. Running
 # the suite once still resolves both compile- and runtime-test dependencies.
-RUN cd /tmp/java-cache && (gradle --no-daemon test || true) && rm -rf /tmp/java-cache
+RUN cd /tmp/java-cache \
+    && sed -i '/testImplementation platform/a\\    testRuntimeOnly "org.junit.platform:junit-platform-console-standalone:1.10.0"' build.gradle \
+    && (gradle --no-daemon test || true) \
+    && rm -rf /tmp/java-cache \
+    && chmod -R a+rX /opt/gradle-cache
 WORKDIR /work
 
 FROM node:20-bookworm-slim AS javascript
