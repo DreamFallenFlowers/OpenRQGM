@@ -137,6 +137,58 @@ def review_example(example_id: str, row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def review_example_size(row: dict[str, Any]) -> int:
+    """Return the exact UTF-8 JSON payload size used for context eligibility."""
+    return len(
+        json.dumps(
+            review_example("eligibility", row),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+
+def context_eligible_rows(
+    rows: Sequence[dict[str, Any]], max_example_bytes: int
+) -> list[dict[str, Any]]:
+    """Keep only complete CRAVE examples that fit the preregistered input cap."""
+    if max_example_bytes <= 0:
+        raise ValueError("CRAVE example byte limit must be positive")
+    return [row for row in rows if review_example_size(row) <= max_example_bytes]
+
+
+def payload_batches(
+    items: Sequence[Any],
+    *,
+    max_items: int,
+    max_payload_bytes: int,
+    payload: Callable[[Any], object],
+) -> list[list[Any]]:
+    """Pack items deterministically without exceeding count or payload limits."""
+    if max_items <= 0 or max_payload_bytes <= 0:
+        raise ValueError("payload batch limits must be positive")
+    batches: list[list[Any]] = []
+    current: list[Any] = []
+    current_bytes = 0
+    for item in items:
+        item_bytes = len(
+            json.dumps(payload(item), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        if item_bytes > max_payload_bytes:
+            raise ValueError("one review example exceeds the prompt payload limit")
+        if current and (
+            len(current) >= max_items or current_bytes + item_bytes > max_payload_bytes
+        ):
+            batches.append(current)
+            current = []
+            current_bytes = 0
+        current.append(item)
+        current_bytes += item_bytes
+    if current:
+        batches.append(current)
+    return batches
+
+
 def find_codex_executable() -> str:
     configured = os.environ.get("CODEX_CLI_PATH")
     if configured and Path(configured).is_file():
@@ -214,12 +266,8 @@ class AppServerWorker:
             bufsize=1,
         )
         assert self.process.stdout is not None and self.process.stderr is not None
-        threading.Thread(
-            target=self._pump_stdout, args=(self.process.stdout,), daemon=True
-        ).start()
-        threading.Thread(
-            target=self._pump_stderr, args=(self.process.stderr,), daemon=True
-        ).start()
+        threading.Thread(target=self._pump_stdout, args=(self.process.stdout,), daemon=True).start()
+        threading.Thread(target=self._pump_stderr, args=(self.process.stderr,), daemon=True).start()
         response = self._request(
             "initialize",
             {"clientInfo": {"name": "openrqgm", "version": "1"}},
@@ -436,8 +484,7 @@ class CodexAppServer:
         if self.available is None:
             executable = find_codex_executable()
             self.workers = [
-                AppServerWorker(executable, self.worker_max_calls)
-                for _ in range(self.concurrency)
+                AppServerWorker(executable, self.worker_max_calls) for _ in range(self.concurrency)
             ]
             self.available = asyncio.Queue()
             for worker in self.workers:
@@ -574,15 +621,17 @@ class CodexCli:
             ]
             if self.reasoning_effort:
                 command.extend(["-c", f'model_reasoning_effort="{self.reasoning_effort}"'])
-            command.extend([
-                "-C",
-                str(self.workdir),
-                "--output-schema",
-                str(schema_path),
-                "-o",
-                str(output_path),
-                "-",
-            ])
+            command.extend(
+                [
+                    "-C",
+                    str(self.workdir),
+                    "--output-schema",
+                    str(schema_path),
+                    "-o",
+                    str(output_path),
+                    "-",
+                ]
+            )
             print(f"[model:start] {purpose}", flush=True)
             started = time.monotonic()
             try:
@@ -1177,6 +1226,7 @@ class BatchedAnchorEvaluator:
     provider: PrivateCraveAnchors
     agent_runner: AgentWorkspaceRunner
     batch_size: int = 20
+    max_payload_bytes: int = 160_000
     parallelism: int = 1
     predictions: dict[str, dict[str, str]] = field(default_factory=dict)
 
@@ -1185,6 +1235,8 @@ class BatchedAnchorEvaluator:
             raise ValueError("anchor batch size must be positive")
         if self.parallelism <= 0:
             raise ValueError("anchor parallelism must be positive")
+        if self.max_payload_bytes <= 0:
+            raise ValueError("anchor payload limit must be positive")
 
     async def _predict(self, candidate: EvaluatorCandidate) -> dict[str, str]:
         examples = await self.provider.examples(candidate.slot_id)
@@ -1210,8 +1262,15 @@ class BatchedAnchorEvaluator:
             "required": ["predictions"],
             "additionalProperties": False,
         }
-        async def predict_batch(start: int) -> dict[str, str]:
-            batch = examples[start : start + self.batch_size]
+        batches = payload_batches(
+            examples,
+            max_items=self.batch_size,
+            max_payload_bytes=self.max_payload_bytes,
+            payload=lambda example: example.artifact,
+        )
+
+        async def predict_batch(batch_index: int) -> dict[str, str]:
+            batch = batches[batch_index]
             try:
                 prompt = await asyncio.to_thread(
                     self.agent_runner.prompt,
@@ -1225,7 +1284,7 @@ class BatchedAnchorEvaluator:
                 result = await self.client.json(
                     prompt,
                     schema,
-                    f"anchor:{candidate.candidate_id}:batch-{start // self.batch_size}",
+                    f"anchor:{candidate.candidate_id}:batch-{batch_index}",
                 )
                 return {item["id"]: item["label"] for item in result["predictions"]}
             except (
@@ -1236,15 +1295,17 @@ class BatchedAnchorEvaluator:
                 json.JSONDecodeError,
             ):
                 return {}
+
         semaphore = asyncio.Semaphore(self.parallelism)
 
-        async def limited(start: int) -> dict[str, str]:
+        async def limited(batch_index: int) -> dict[str, str]:
             async with semaphore:
-                return await predict_batch(start)
+                return await predict_batch(batch_index)
 
         predictions: dict[str, str] = {}
-        starts = range(0, len(examples), self.batch_size)
-        for batch_predictions in await asyncio.gather(*(limited(start) for start in starts)):
+        for batch_predictions in await asyncio.gather(
+            *(limited(batch_index) for batch_index in range(len(batches)))
+        ):
             predictions.update(batch_predictions)
         return predictions
 
@@ -1263,6 +1324,7 @@ class TrainingFeedback:
     coding_evaluator: CodingTaskEvaluator
     coder_tasks: list[PolyglotTask]
     coder_samples_per_node: int
+    max_payload_bytes: int = 160_000
     index: int = 0
 
     async def collect(self, node, tasks, evaluators, budget):  # type: ignore[no-untyped-def]
@@ -1295,28 +1357,41 @@ class TrainingFeedback:
             "required": ["predictions"],
             "additionalProperties": False,
         }
+
         async def collect_reviewer() -> list[dict[str, Any]]:
             reviewer_feedback: list[dict[str, Any]] = []
             if not selected:
                 return reviewer_feedback
             try:
-                prompt = await asyncio.to_thread(
-                    self.coding_evaluator.agent_runner.prompt,
-                    node.workspace,
-                    "reviewer",
-                    {
-                        "examples": [
-                            review_example(example_id, row) for example_id, row in selected
-                        ],
-                        "response_contract": "Return a prediction for every id without reordering.",
-                    },
+                predictions: dict[str, str] = {}
+                batches = payload_batches(
+                    selected,
+                    max_items=max(1, self.reviewer_samples_per_node),
+                    max_payload_bytes=self.max_payload_bytes,
+                    payload=lambda item: review_example(item[0], item[1]),
                 )
-                result = await self.client.json(
-                    prompt,
-                    schema,
-                    f"crave-training:{selected[0][0]}..{selected[-1][0]}",
-                )
-                predictions = {item["id"]: item["label"] for item in result["predictions"]}
+                for batch_index, batch in enumerate(batches):
+                    prompt = await asyncio.to_thread(
+                        self.coding_evaluator.agent_runner.prompt,
+                        node.workspace,
+                        "reviewer",
+                        {
+                            "examples": [
+                                review_example(example_id, row) for example_id, row in batch
+                            ],
+                            "response_contract": (
+                                "Return a prediction for every id without reordering."
+                            ),
+                        },
+                    )
+                    result = await self.client.json(
+                        prompt,
+                        schema,
+                        f"crave-training:batch-{batch_index}:{batch[0][0]}..{batch[-1][0]}",
+                    )
+                    predictions.update(
+                        {item["id"]: item["label"] for item in result["predictions"]}
+                    )
                 for example_id, row in selected:
                     prediction = predictions.get(example_id)
                     reviewer_feedback.append(
@@ -1464,7 +1539,9 @@ def build_engine(
             int(config["polyglot_validation_tasks_per_language"]),
             int(config["polyglot_test_tasks_per_language"]),
         )
-    crave_train_rows = load_rows("train")
+    crave_example_max_bytes = int(config.get("crave_example_max_bytes", 80_000))
+    crave_prompt_max_bytes = int(config.get("crave_prompt_max_bytes", 160_000))
+    crave_train_rows = context_eligible_rows(load_rows("train"), crave_example_max_bytes)
     crave_train_count = config.get("crave_training_pool_examples", 32)
     crave_train = (
         sample_rows(crave_train_rows, len(crave_train_rows), seed + 1)
@@ -1472,9 +1549,15 @@ def build_engine(
         else sample_rows(crave_train_rows, int(crave_train_count), seed + 1)
     )
     crave_validation = sample_rows(
-        load_rows("validation"), int(config["crave_validation_examples"]), seed + 2
+        context_eligible_rows(load_rows("validation"), crave_example_max_bytes),
+        int(config["crave_validation_examples"]),
+        seed + 2,
     )
-    crave_anchors = sample_rows(load_rows("test"), int(config["crave_anchor_examples"]), seed + 3)
+    crave_anchors = sample_rows(
+        context_eligible_rows(load_rows("test"), crave_example_max_bytes),
+        int(config["crave_anchor_examples"]),
+        seed + 3,
+    )
     provider = PrivateCraveAnchors(crave_anchors)
     images = config.get("polyglot_images", DEFAULT_IMAGES)
     agent_runner = AgentWorkspaceRunner(
@@ -1516,6 +1599,7 @@ def build_engine(
                 provider=provider,
                 agent_runner=agent_runner,
                 batch_size=int(config.get("anchor_batch_size", len(crave_anchors))),
+                max_payload_bytes=crave_prompt_max_bytes,
                 parallelism=int(config.get("anchor_concurrency", 1)),
             ),
             training_feedback=TrainingFeedback(
@@ -1525,6 +1609,7 @@ def build_engine(
                 task_evaluator,
                 coder_train_tasks,
                 int(config["coder_training_samples_per_node"]),
+                crave_prompt_max_bytes,
             ),
         ),
         config=RQGMConfig(
@@ -1586,6 +1671,8 @@ async def execute(config_path: Path) -> None:
         "condition": config.get("experiment_condition", "coevolving_reviewer"),
         "config_fingerprint": canonical_hash(config),
         "data_split_fingerprint": canonical_hash(data_split),
+        "crave_training_fingerprint": canonical_hash(engine.runtime.training_feedback.rows),
+        "crave_validation_fingerprint": canonical_hash(task_evaluator.crave_validation),
         "anchor_fingerprint": engine.runtime.anchor_provider.fingerprint,
         "source": source_identity(),
     }
@@ -1658,6 +1745,8 @@ async def execute(config_path: Path) -> None:
         "source": source_identity(),
         "config_fingerprint": canonical_hash(config),
         "data_split_fingerprint": canonical_hash(data_split),
+        "crave_training_fingerprint": canonical_hash(engine.runtime.training_feedback.rows),
+        "crave_validation_fingerprint": canonical_hash(task_evaluator.crave_validation),
         "result": asdict(result),
         "anchor_provider": {
             "provider_id": engine.runtime.anchor_provider.provider_id,

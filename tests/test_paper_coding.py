@@ -29,6 +29,40 @@ def test_review_example_does_not_include_label() -> None:
     assert "label" not in MODULE.review_example("example", row)
 
 
+def test_context_filter_is_deterministic_and_keeps_complete_examples() -> None:
+    rows = [
+        {
+            "pull_request_title": "small",
+            "patch": "x" * 10,
+            "description": "description",
+            "hint": "hint",
+            "label": "APPROVE",
+        },
+        {
+            "pull_request_title": "large",
+            "patch": "x" * 500,
+            "description": "description",
+            "hint": "hint",
+            "label": "REQUEST_CHANGES",
+        },
+    ]
+    limit = MODULE.review_example_size(rows[0])
+    assert MODULE.context_eligible_rows(rows, limit) == [rows[0]]
+    assert rows[0]["patch"] == "x" * 10
+
+
+def test_payload_batches_respect_count_and_byte_caps() -> None:
+    items = ["a" * 20, "b" * 20, "c" * 20]
+    single = len(json.dumps(items[0]).encode("utf-8"))
+    batches = MODULE.payload_batches(
+        items,
+        max_items=3,
+        max_payload_bytes=single * 2,
+        payload=lambda item: item,
+    )
+    assert batches == [items[:2], items[2:]]
+
+
 def test_codex_discovery_avoids_windows_store_alias() -> None:
     assert "WindowsApps" not in MODULE.find_codex_executable()
 
@@ -197,9 +231,7 @@ def test_parallel_anchor_batches_preserve_all_predictions() -> None:
             examples = json.loads(prompt)["examples"]
             self.active -= 1
             return {
-                "predictions": [
-                    {"id": example["id"], "label": "APPROVE"} for example in examples
-                ]
+                "predictions": [{"id": example["id"], "label": "APPROVE"} for example in examples]
             }
 
     client = ConcurrentClient()

@@ -171,6 +171,15 @@ all six language images. See `docs/paper-matched-v2.md` for the remaining
 non-public assets and adapter differences that keep `paper_comparison_valid`
 false.
 
+`configs/paper_matched_v5_context_safe_rqgm.json` adds a preregistered transport
+constraint required by the public CRAVE data: before seeded sampling, every
+split is filtered by the same 80,000-byte complete-example limit. Retained
+examples are never truncated. Reviewer-training and private-anchor prompts are
+then packed deterministically below 160,000 payload bytes. The config and the
+three selected CRAVE pools are fingerprinted, so this profile cannot resume a
+v4 state or silently change its data. This is a public-harness approximation,
+not a newly claimed paper-exact setting.
+
 ## Full public RSI suite
 
 `configs/public_suite_full.json` defines the public replacement suite used for
