@@ -63,8 +63,11 @@ def test_payload_batches_respect_count_and_byte_caps() -> None:
     assert batches == [items[:2], items[2:]]
 
 
-def test_codex_discovery_avoids_windows_store_alias() -> None:
-    assert "WindowsApps" not in MODULE.find_codex_executable()
+def test_codex_discovery_uses_explicit_cli_path(tmp_path) -> None:
+    executable = tmp_path / "codex"
+    executable.write_text("", encoding="utf-8")
+    with patch.dict(MODULE.os.environ, {"CODEX_CLI_PATH": str(executable)}, clear=True):
+        assert MODULE.find_codex_executable() == str(executable)
 
 
 def test_codex_jsonl_token_usage_is_recorded_in_both_metrics() -> None:
