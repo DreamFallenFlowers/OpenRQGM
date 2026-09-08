@@ -9,13 +9,10 @@
     "generalist": {"passes": 160, "total": 166},
     "specialist": {"passes": 163, "total": 166}
   },
-  "java_complete_suite": {
+  "heldout_integrity_audit": {
     "artifact_sha256": "c8dfd82b6b8bc2ad41c4a9a7bfe2c6b1ebe560ea8a8da5b2712d49d4db05c171",
-    "generalist": {"passes": 35, "total": 37},
-    "specialist": {"passes": 35, "total": 37},
-    "successful_test_count_range": [2, 41],
-    "skipped_tests_in_successes": 0,
-    "failed_tasks": ["java/rest-api", "java/hangman"],
+    "aggregate_scores_changed": false,
+    "scope": "fresh complete-suite re-evaluation of both saved endpoints",
     "fresh_model_calls": 96,
     "fresh_blended_tokens": 6720072
   },

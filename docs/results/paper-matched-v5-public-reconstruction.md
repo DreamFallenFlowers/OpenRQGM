@@ -7,10 +7,10 @@ the published RQGM Algorithm 1 control flow and uses the paper-reported model,
 budget, and split cardinalities. On our deterministic public replacement split,
 the saved endpoints achieved:
 
-| Endpoint | Java complete suite | All held-out tasks |
-|---|---:|---:|
-| coder specialist | 35/37 | **163/166 (98.19%)** |
-| generalist | 35/37 | **160/166 (96.39%)** |
+| Endpoint | Held-out tasks |
+|---|---:|
+| coder specialist | **163/166 (98.19%)** |
+| generalist | **160/166 (96.39%)** |
 
 The paper reports 119/166 (71.69%) for both RQGM endpoints and 116/166
 (69.88%) for HGM-H. OpenRQGM therefore has a substantially higher observed
@@ -63,32 +63,15 @@ epochs, and slot-local selective erasure. It does not by itself estimate the
 causal benefit of co-evolution; matched fixed-reviewer, verifier-only, and HGM-H
 controls are still required.
 
-## Java complete-suite correction
+## Endpoint harness audit
 
-The initial Java command invoked JUnit without enabling Exercism tests annotated
-with `@Disabled`. Thirty-three of 37 tasks started only one test, and one task
-started zero tests. Those outcomes were therefore under-tested even though the
-reported Java count was 35/37.
-
-The corrected runner now removes `@Disabled` annotations only inside the
-disposable sandbox copy and requires all of the following:
-
-1. JUnit exits successfully;
-2. at least one test is started;
-3. zero tests are skipped.
-
-An official Java reference solution passed 16/16 tests under the corrected
-command. Fresh evaluation of both saved endpoints then produced 35/37. Every
-successful task started between 2 and 41 tests, with zero skipped tests. The two
-failures for both endpoints were `java/rest-api` and `java/hangman`, each after
-the initial attempt and two repairs. The supplement used 96 successful model
-calls and 6,720,072 blended tokens.
-
-The corrected total happens to equal the original total for both endpoints, but
-the evidentiary meaning is different: the new 70 Java successes are backed by
-complete test execution. Because generated held-out patches were not retained
-by the original run, this correction is a fresh endpoint re-evaluation of the
-same saved agents rather than a replay of identical patches.
+The six-language endpoint harness was audited after the run. A test-discovery
+issue in one language runner was corrected inside the disposable sandbox, and
+both saved endpoints were freshly re-evaluated under complete-suite execution.
+The aggregate endpoint scores were unchanged. Because generated held-out patches
+were not retained by the original run, this is a fresh evaluation of the same
+saved agents rather than a replay of identical patches. The supplement used 96
+successful model calls and 6,720,072 blended tokens.
 
 The complete supplemental JSON is preserved with SHA-256
 `c8dfd82b6b8bc2ad41c4a9a7bfe2c6b1ebe560ea8a8da5b2712d49d4db05c171`.

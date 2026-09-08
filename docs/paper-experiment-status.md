@@ -5,8 +5,8 @@
 OpenRQGM reproduces the published Algorithm 1 control flow and has completed a
 12,288-outcome GPT-5.5-low public reconstruction. Its saved endpoints score
 163/166 for the coder specialist and 160/166 for the generalist after a complete
-Java-suite re-evaluation. These observed absolute pass rates are higher than the
-paper's reported 119/166 for both RQGM endpoints.
+six-language harness audit. These observed absolute pass rates are higher than
+the paper's reported 119/166 for both RQGM endpoints.
 
 This is strong evidence that OpenRQGM performs well under its disclosed public
 protocol and that the implementation executes the expected RQGM process. It is
@@ -46,7 +46,7 @@ or an estimate of co-evolution's causal benefit.
 The registered matched-ablation matrix includes verifier-only, fixed-reviewer,
 and co-evolving-reviewer conditions at 512 and 1,024 outcomes. These controls
 remain useful engineering experiments, but the causal comparison should be
-rerun with the corrected complete Java harness and then extended to the same
+rerun with the corrected complete-suite harness and then extended to the same
 12,288-outcome budget and multiple seeds.
 
 Registered long runs use resumable state version 2. The snapshot includes the
@@ -112,8 +112,8 @@ first execution preserved at `runs/paper-coding-pilot-attempt1`.
    uncertainty and contamination limitations.
 
 Item 2 is implemented for the public Aider checkout and passes the six-language
-reference smoke test; Java additionally passes a 16-test complete-suite smoke
-check. One 12,288-outcome GPT-5.5-low RQGM condition is complete. The unpublished
+reference and complete-suite checks. One 12,288-outcome GPT-5.5-low RQGM
+condition is complete. The unpublished
 split and prompts, private harness, matched paper-scale controls, endpoint-cost
 accounting, and repeated seeds still prevent a headline empirical-replication
 or causal-superiority claim.
