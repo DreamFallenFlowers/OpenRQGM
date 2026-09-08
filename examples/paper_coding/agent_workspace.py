@@ -35,7 +35,7 @@ functions = {"coder": coder, "repair": repair, "reviewer": reviewer}
 print(json.dumps({"prompt": functions[operation](request["context"])}, ensure_ascii=False))
 """
 
-PAPER_V2_SEED_AGENT = r'''import json, sys
+PAPER_V2_SEED_AGENT = r"""import json, sys
 
 def shared(context, output_format):
     return ("You are an agent.\nTask input:\n```\n" +
@@ -66,7 +66,7 @@ request = json.load(sys.stdin)
 operation = request["operation"]
 functions = {"coder": coder, "repair": repair, "reviewer": reviewer}
 print(json.dumps({"prompt": functions[operation](request["context"])}, ensure_ascii=False))
-'''
+"""
 
 
 def seed_workspace(profile: str = "reconstruction_v3") -> dict[str, Any]:
@@ -152,7 +152,7 @@ class AgentWorkspaceRunner:
                 self.image,
                 "/bin/sh",
                 "-c",
-                "ulimit -v 262144; ulimit -u 64; exec python3 \"$1\"",
+                'ulimit -v 262144; ulimit -u 64; exec python3 "$1"',
                 "openrqgm-agent",
                 workspace["entrypoint"],
             ]

@@ -15,6 +15,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -429,10 +430,8 @@ class AppServerWorker:
         if process is None:
             return
         if process.stdin is not None:
-            try:
+            with suppress(OSError):
                 process.stdin.close()
-            except OSError:
-                pass
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:

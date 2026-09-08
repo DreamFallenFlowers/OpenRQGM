@@ -34,9 +34,7 @@ def main() -> None:
 
     problems = load_code_generation_dataset("release_v6")
     problems = [
-        problem
-        for problem in problems
-        if problem.contest_date.date().isoformat() <= "2025-04-30"
+        problem for problem in problems if problem.contest_date.date().isoformat() <= "2025-04-30"
     ]
     if len(problems) != EXPECTED_COUNT:
         raise SystemExit(f"expected {EXPECTED_COUNT} release_v6 problems, found {len(problems)}")

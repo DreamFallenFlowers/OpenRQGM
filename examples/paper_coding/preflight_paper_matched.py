@@ -45,8 +45,7 @@ def main() -> int:
     configs = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
     allowed = {"claim", "experiment_condition", "output", "limitations"}
     projections = [
-        {key: value for key, value in config.items() if key not in allowed}
-        for config in configs
+        {key: value for key, value in config.items() if key not in allowed} for config in configs
     ]
     assert projections[0] == projections[1], "RQGM and HGM-H cells are not matched"
     config = configs[0]
