@@ -2,11 +2,19 @@
 
 ## Verdict
 
-OpenRQGM reproduces the published Algorithm 1 control flow, but it has **not
-reproduced the paper's headline empirical results**. The paper reports 119/166
-held-out Polyglot tasks for both its RQGM specialist and generalist endpoints.
-No result in this repository should currently be presented as a replication of
-that number.
+OpenRQGM reproduces the published Algorithm 1 control flow and has completed a
+12,288-outcome GPT-5.5-low public reconstruction. Its saved endpoints score
+163/166 for the coder specialist and 160/166 for the generalist after a complete
+Java-suite re-evaluation. These observed absolute pass rates are higher than the
+paper's reported 119/166 for both RQGM endpoints.
+
+This is strong evidence that OpenRQGM performs well under its disclosed public
+protocol and that the implementation executes the expected RQGM process. It is
+**not a strict replication or head-to-head superiority result**: the paper's
+exact split, production prompts, provider revision, and private harness are
+unpublished, and this run does not include a same-harness HGM-H control. The
+machine-readable result therefore retains `paper_comparison_valid=false`. See
+[the complete v5 report](results/paper-matched-v5-public-reconstruction.md).
 
 The first 128-outcome local run used a v1 coding adapter that cached one
 Polyglot solution per node and could count repeated deterministic test results
@@ -35,12 +43,11 @@ checkpoints retained the seed reviewer, so this run validates the challenger
 and anchor-election path but does not provide an observed evaluator transition
 or an estimate of co-evolution's causal benefit.
 
-The next registered experiment is `polyglot-matched-v1`: verifier-only, fixed
-reviewer, and co-evolving reviewer conditions at both 512 and 1,024 outcomes.
-It restores the 100-example anchor, expands held-out evaluation to 60 disjoint
-tasks, records Codex raw/blended tokens, and enforces identical data and anchor
-fingerprints across all six cells. These remain intermediate public
-reconstruction experiments, not the paper's unpublished exact split.
+The registered matched-ablation matrix includes verifier-only, fixed-reviewer,
+and co-evolving-reviewer conditions at 512 and 1,024 outcomes. These controls
+remain useful engineering experiments, but the causal comparison should be
+rerun with the corrected complete Java harness and then extended to the same
+12,288-outcome budget and multiple seeds.
 
 Registered long runs use resumable state version 2. The snapshot includes the
 search RNG and exact checkpoint prefix, is written by atomic replacement every
@@ -54,7 +61,7 @@ change the RQGM validation budget or evaluator replacement rule.
 | Component | Status | Notes |
 |---|---|---|
 | Algorithm 1 search/control flow | Exact to published pseudocode | CMP, UCB-Air, binary budget, checkpoints, frozen evaluators, anchor replacement, and selective erasure are in the core package. |
-| Reported paper-scale settings | Recorded | `configs/paper_full.json` records the v2 settings: 12,288 outcomes, GPT-5.5 low, alpha 0.6, epsilon 0.05, three training samples per node, the power-of-two checkpoint ratio, and the 10/49/166 split sizes. The first checkpoint is not specified in the RQGM paper. |
+| Reported paper-scale settings | Executed where public | The v5 run uses 12,288 outcomes, GPT-5.5 low, alpha 0.6, epsilon 0.05, three training samples per node, power-of-two checkpoints, and 10/49/166 split sizes. The exact task identities and first checkpoint are not specified in the paper. |
 | Polyglot task source | Public reconstruction | Official Aider repository pinned locally at commit `7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f`. The paper's exact task split is unpublished. |
 | CRAVE reviewer anchor | Public reconstruction | Deterministic withheld sample of the public CRAVE test split; exact paper sample is unpublished. |
 | Model and prompts | Approximation | Earlier pilots use authenticated `gpt-5.6-sol`; the paper-matched v2 profile uses GPT-5.5 low. Appendix C.5 publishes the shared seed template and meta-agent instruction, but not every complete role prompt, provider revision, or production harness. |
@@ -104,8 +111,9 @@ first execution preserved at `runs/paper-coding-pilot-attempt1`.
 6. Report the reconstruction separately from the paper's number and include
    uncertainty and contamination limitations.
 
-Item 2 is now implemented for the public Aider checkout and passes a 6/6
-reference-solution smoke test. The remaining items—especially the unpublished
-split, 12,288-outcome scale, exact model endpoint, and repeated seeds—still
-prevent a headline empirical-replication claim. The 128-outcome v3 run is an
-integration and method-reconstruction experiment only.
+Item 2 is implemented for the public Aider checkout and passes the six-language
+reference smoke test; Java additionally passes a 16-test complete-suite smoke
+check. One 12,288-outcome GPT-5.5-low RQGM condition is complete. The unpublished
+split and prompts, private harness, matched paper-scale controls, endpoint-cost
+accounting, and repeated seeds still prevent a headline empirical-replication
+or causal-superiority claim.

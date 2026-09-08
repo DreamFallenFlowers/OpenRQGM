@@ -21,14 +21,23 @@ TEST_COMMANDS: dict[str, list[str]] = {
     "java": [
         "bash",
         "-lc",
+        "find src/test/java -type f -name '*.java' -exec "
+        "sed -i -E 's/@Disabled(\\([^)]*\\))?//g' {} +; "
         "classes=$(mktemp -d); "
         "classpath=$(find /opt/gradle-cache -type f -name '*.jar' -print | paste -sd: -); "
         "console=$(find /opt/gradle-cache -type f "
         "-name 'junit-platform-console-standalone-*.jar' -print -quit); "
         "find src/main/java src/test/java -type f -name '*.java' -print0 "
-        "| xargs -0 javac -cp \"$classpath\" -d \"$classes\" && "
-        "java -jar \"$console\" execute --class-path \"$classes:$classpath\" "
-        "--scan-class-path",
+        '| xargs -0 javac -cp "$classpath" -d "$classes" && '
+        'test_output=$(java -jar "$console" execute '
+        '--class-path "$classes:$classpath" --scan-class-path '
+        "--disable-ansi-colors --details=summary 2>&1); "
+        "test_status=$?; printf '%s\\n' \"$test_output\"; "
+        '[ "$test_status" -eq 0 ] && '
+        "printf '%s\\n' \"$test_output\" "
+        "| grep -Eq '\\[[[:space:]]*[1-9][0-9]* tests started[[:space:]]*\\]' && "
+        "printf '%s\\n' \"$test_output\" "
+        "| grep -Eq '\\[[[:space:]]*0 tests skipped[[:space:]]*\\]'",
     ],
     "javascript": [
         "bash",

@@ -9,6 +9,7 @@ sys.path.insert(0, str(EXAMPLE))
 from agent_workspace import seed_workspace, validate_workspace, workspace_from_files  # noqa: E402
 from polyglot import (  # noqa: E402
     LANGUAGES,
+    TEST_COMMANDS,
     PolyglotTask,
     editable_files,
     safe_relative,
@@ -66,3 +67,11 @@ def test_meta_agent_can_replace_whole_codebase_but_not_escape() -> None:
 def test_polyglot_task_identity_includes_language() -> None:
     task = PolyglotTask("python", Path("exercise"))
     assert task.task_id == "python/exercise"
+
+
+def test_java_runner_enables_and_requires_the_complete_suite() -> None:
+    command = TEST_COMMANDS["java"][2]
+    assert "s/@Disabled" in command
+    assert "tests started" in command
+    assert "0 tests skipped" in command
+    assert "test_status" in command

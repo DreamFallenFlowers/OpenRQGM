@@ -1,0 +1,39 @@
+{
+  "claim": "strong public reconstruction result following published RQGM Algorithm 1; not a strict empirical replication",
+  "paper_comparison_valid": false,
+  "paper_endpoint": {
+    "generalist": {"passes": 119, "total": 166},
+    "specialist": {"passes": 119, "total": 166}
+  },
+  "openrqgm_endpoint": {
+    "generalist": {"passes": 160, "total": 166},
+    "specialist": {"passes": 163, "total": 166}
+  },
+  "java_complete_suite": {
+    "artifact_sha256": "c8dfd82b6b8bc2ad41c4a9a7bfe2c6b1ebe560ea8a8da5b2712d49d4db05c171",
+    "generalist": {"passes": 35, "total": 37},
+    "specialist": {"passes": 35, "total": 37},
+    "successful_test_count_range": [2, 41],
+    "skipped_tests_in_successes": 0,
+    "failed_tasks": ["java/rest-api", "java/hangman"],
+    "fresh_model_calls": 96,
+    "fresh_blended_tokens": 6720072
+  },
+  "search": {
+    "seed": 260626294,
+    "model": "gpt-5.5",
+    "reasoning_effort": "low",
+    "validation_outcomes": 12288,
+    "archive_nodes": 285,
+    "checkpoints": 11,
+    "evaluator_replacements": 4,
+    "erased_records": 2182,
+    "wall_time_seconds": 241860.56,
+    "blended_tokens": 447365462
+  },
+  "reviewer_anchor": {
+    "seed_successes": 70,
+    "final_best_observed_successes": 82,
+    "total": 100
+  }
+}
