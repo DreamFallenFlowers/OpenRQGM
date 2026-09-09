@@ -1,0 +1,36 @@
+{
+  "claim": "strong public reconstruction result following published RQGM Algorithm 1; not a strict empirical replication",
+  "paper_comparison_valid": false,
+  "paper_endpoint": {
+    "generalist": {"passes": 119, "total": 166},
+    "specialist": {"passes": 119, "total": 166}
+  },
+  "openrqgm_endpoint": {
+    "generalist": {"passes": 160, "total": 166},
+    "specialist": {"passes": 163, "total": 166}
+  },
+  "heldout_integrity_audit": {
+    "artifact_sha256": "c8dfd82b6b8bc2ad41c4a9a7bfe2c6b1ebe560ea8a8da5b2712d49d4db05c171",
+    "aggregate_scores_changed": false,
+    "scope": "fresh complete-suite re-evaluation of both saved endpoints",
+    "fresh_model_calls": 96,
+    "fresh_blended_tokens": 6720072
+  },
+  "search": {
+    "seed": 260626294,
+    "model": "gpt-5.5",
+    "reasoning_effort": "low",
+    "validation_outcomes": 12288,
+    "archive_nodes": 285,
+    "checkpoints": 11,
+    "evaluator_replacements": 4,
+    "erased_records": 2182,
+    "wall_time_seconds": 241860.56,
+    "blended_tokens": 447365462
+  },
+  "reviewer_anchor": {
+    "seed_successes": 70,
+    "final_best_observed_successes": 82,
+    "total": 100
+  }
+}

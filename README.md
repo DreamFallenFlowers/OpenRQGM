@@ -73,6 +73,19 @@ For the current status of the paper's empirical reproduction and the runnable
 Polyglot/CRAVE pilot, see [Paper experiment reproduction status](docs/paper-experiment-status.md)
 and [`examples/paper_coding`](examples/paper_coding).
 
+## Latest public reconstruction result
+
+The completed GPT-5.5-low, 12,288-outcome public reconstruction reached
+**163/166 (98.19%)** for its coder specialist and **160/166 (96.39%)** for its
+generalist. The six-language endpoint harness was audited and corrected before
+the aggregate scores were finalized.
+
+These observed absolute scores are higher than the paper's reported 119/166,
+and the saved state follows the published Algorithm 1 process. They are not a
+strict head-to-head result: exact task identities, production prompts, provider
+revision, and the authors' harness are unavailable, and no matched HGM-H control
+was run. See the [full result and limitations](docs/results/paper-matched-v5-public-reconstruction.md).
+
 ## Python API
 
 ```python

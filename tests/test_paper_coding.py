@@ -3,6 +3,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 MODULE_PATH = Path(__file__).parents[1] / "examples" / "paper_coding" / "run.py"
 sys.path.insert(0, str(MODULE_PATH.parent))
@@ -28,8 +29,45 @@ def test_review_example_does_not_include_label() -> None:
     assert "label" not in MODULE.review_example("example", row)
 
 
-def test_codex_discovery_avoids_windows_store_alias() -> None:
-    assert "WindowsApps" not in MODULE.find_codex_executable()
+def test_context_filter_is_deterministic_and_keeps_complete_examples() -> None:
+    rows = [
+        {
+            "pull_request_title": "small",
+            "patch": "x" * 10,
+            "description": "description",
+            "hint": "hint",
+            "label": "APPROVE",
+        },
+        {
+            "pull_request_title": "large",
+            "patch": "x" * 500,
+            "description": "description",
+            "hint": "hint",
+            "label": "REQUEST_CHANGES",
+        },
+    ]
+    limit = MODULE.review_example_size(rows[0])
+    assert MODULE.context_eligible_rows(rows, limit) == [rows[0]]
+    assert rows[0]["patch"] == "x" * 10
+
+
+def test_payload_batches_respect_count_and_byte_caps() -> None:
+    items = ["a" * 20, "b" * 20, "c" * 20]
+    single = len(json.dumps(items[0]).encode("utf-8"))
+    batches = MODULE.payload_batches(
+        items,
+        max_items=3,
+        max_payload_bytes=single * 2,
+        payload=lambda item: item,
+    )
+    assert batches == [items[:2], items[2:]]
+
+
+def test_codex_discovery_uses_explicit_cli_path(tmp_path) -> None:
+    executable = tmp_path / "codex"
+    executable.write_text("", encoding="utf-8")
+    with patch.dict(MODULE.os.environ, {"CODEX_CLI_PATH": str(executable)}, clear=True):
+        assert MODULE.find_codex_executable() == str(executable)
 
 
 def test_codex_jsonl_token_usage_is_recorded_in_both_metrics() -> None:
@@ -60,6 +98,21 @@ def test_model_call_ledger_survives_process_restart(tmp_path) -> None:
     first._record_call({"purpose": "one", "raw_total_tokens": 3})
     second = MODULE.CodexCli("test-model", 1, tmp_path, ledger)
     assert second.calls == [{"purpose": "one", "raw_total_tokens": 3}]
+
+
+def test_app_server_usage_mapping_preserves_token_metrics() -> None:
+    usage = MODULE.AppServerWorker._usage_fields(
+        {
+            "totalTokens": 110,
+            "inputTokens": 100,
+            "cachedInputTokens": 20,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 10,
+            "reasoningOutputTokens": 2,
+        }
+    )
+    assert usage["raw_total_tokens"] == 110
+    assert usage["blended_tokens"] == 150
 
 
 def test_challenger_source_skips_incumbent_artifact() -> None:
@@ -148,6 +201,56 @@ def test_anchor_inference_is_chunked_without_changing_binary_examples() -> None:
         "anchor:candidate:batch-2",
     ]
     assert len(evaluator.predictions["candidate"]) == 5
+
+
+def test_parallel_anchor_batches_preserve_all_predictions() -> None:
+    rows = [
+        {
+            "pull_request_title": f"title-{index}",
+            "patch": f"patch-{index}",
+            "description": "description",
+            "hint": "hint",
+            "label": "APPROVE",
+        }
+        for index in range(8)
+    ]
+    provider = MODULE.PrivateCraveAnchors(rows)
+
+    class JsonAgentRunner:
+        def prompt(self, workspace, operation, context):  # type: ignore[no-untyped-def]
+            del workspace, operation
+            return json.dumps(context)
+
+    class ConcurrentClient:
+        def __init__(self) -> None:
+            self.active = 0
+            self.max_active = 0
+
+        async def json(self, prompt, schema, purpose):  # type: ignore[no-untyped-def]
+            del schema, purpose
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            await asyncio.sleep(0.01)
+            examples = json.loads(prompt)["examples"]
+            self.active -= 1
+            return {
+                "predictions": [{"id": example["id"], "label": "APPROVE"} for example in examples]
+            }
+
+    client = ConcurrentClient()
+    evaluator = MODULE.BatchedAnchorEvaluator(
+        client, provider, JsonAgentRunner(), batch_size=2, parallelism=4
+    )
+    candidate = MODULE.EvaluatorCandidate.create(
+        "code-reviewer",
+        {"workspace": MODULE.seed_workspace()},
+        source="test",
+        candidate_id="candidate",
+    )
+    examples = asyncio.run(provider.examples("code-reviewer"))
+    assert asyncio.run(evaluator.evaluate(candidate, examples[0])) == 1
+    assert client.max_active == 4
+    assert len(evaluator.predictions["candidate"]) == 8
 
 
 def test_matched_ablation_configs_only_vary_declared_fields() -> None:
@@ -324,6 +427,41 @@ def test_polyglot_order_is_language_round_robin() -> None:
     width = len(MODULE.LANGUAGES)
     assert len({task.language for task in ordered[:width]}) == width
     assert len({task.language for task in ordered[width : 2 * width]}) == width
+
+
+def test_parallel_training_preserves_deterministic_result_order() -> None:
+    evaluator = MODULE.CodingTaskEvaluator(
+        client=object(),
+        runner=object(),
+        agent_runner=object(),
+        validation_tasks=[],
+        crave_validation=[],
+        random_seed=7,
+        parallelism=3,
+    )
+    tasks = [MODULE.PolyglotTask("python", Path(f"task-{index}")) for index in range(3)]
+    active = 0
+    max_active = 0
+
+    async def fake_generate(self, node, task, *, phase, purpose_prefix):  # type: ignore[no-untyped-def]
+        nonlocal active, max_active
+        del self, node, phase, purpose_prefix
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01 * (4 - int(task.path.name.rsplit("-", 1)[1])))
+        active -= 1
+        return {
+            "test_outcome": 1,
+            "attempts": 1,
+            "sandbox": {"returncode": 0},
+        }
+
+    node = MODULE.WorkspaceNode("node", MODULE.seed_workspace(), None, 0)
+    expected = [task.task_id for task in evaluator._ordered_tasks("node", tasks, "training")]
+    with patch.object(MODULE.CodingTaskEvaluator, "_generate_artifact", fake_generate):
+        results = asyncio.run(evaluator.training_samples(node, tasks, 3))
+    assert max_active == 3
+    assert [item["task"] for item in results] == expected
 
 
 def test_task_material_includes_repository_tests(tmp_path) -> None:  # type: ignore[no-untyped-def]

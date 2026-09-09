@@ -5,13 +5,17 @@ import asyncio
 import hashlib
 import json
 import os
+import queue
 import random
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
-from collections.abc import Sequence
+from collections import deque
+from collections.abc import Callable, Sequence
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,6 +33,7 @@ from polyglot import (
     PolyglotTask,
     replacements_from_json,
     split_balanced,
+    split_counts,
 )
 from polyglot import (
     material as task_material,
@@ -133,6 +138,58 @@ def review_example(example_id: str, row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def review_example_size(row: dict[str, Any]) -> int:
+    """Return the exact UTF-8 JSON payload size used for context eligibility."""
+    return len(
+        json.dumps(
+            review_example("eligibility", row),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+
+def context_eligible_rows(
+    rows: Sequence[dict[str, Any]], max_example_bytes: int
+) -> list[dict[str, Any]]:
+    """Keep only complete CRAVE examples that fit the preregistered input cap."""
+    if max_example_bytes <= 0:
+        raise ValueError("CRAVE example byte limit must be positive")
+    return [row for row in rows if review_example_size(row) <= max_example_bytes]
+
+
+def payload_batches(
+    items: Sequence[Any],
+    *,
+    max_items: int,
+    max_payload_bytes: int,
+    payload: Callable[[Any], object],
+) -> list[list[Any]]:
+    """Pack items deterministically without exceeding count or payload limits."""
+    if max_items <= 0 or max_payload_bytes <= 0:
+        raise ValueError("payload batch limits must be positive")
+    batches: list[list[Any]] = []
+    current: list[Any] = []
+    current_bytes = 0
+    for item in items:
+        item_bytes = len(
+            json.dumps(payload(item), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        if item_bytes > max_payload_bytes:
+            raise ValueError("one review example exceeds the prompt payload limit")
+        if current and (
+            len(current) >= max_items or current_bytes + item_bytes > max_payload_bytes
+        ):
+            batches.append(current)
+            current = []
+            current_bytes = 0
+        current.append(item)
+        current_bytes += item_bytes
+    if current:
+        batches.append(current)
+    return batches
+
+
 def find_codex_executable() -> str:
     configured = os.environ.get("CODEX_CLI_PATH")
     if configured and Path(configured).is_file():
@@ -152,13 +209,352 @@ def find_codex_executable() -> str:
     raise FileNotFoundError("Codex desktop CLI is not available")
 
 
+class ModelCallError(Exception):
+    """Transient model-service failure that must not become a benchmark outcome."""
+
+
+class AppServerWorker:
+    """One persistent Codex app-server process serving one request at a time."""
+
+    def __init__(self, executable: str, max_calls: int = 200) -> None:
+        self.executable = executable
+        self.max_calls = max_calls
+        self.process: subprocess.Popen[str] | None = None
+        self.stdout_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
+        self.stderr_tail: deque[str] = deque(maxlen=40)
+        self.request_id = 0
+        self.call_count = 0
+        self.lock = threading.Lock()
+
+    def _pump_stdout(self, stream: Any) -> None:
+        for line in stream:
+            try:
+                self.stdout_queue.put(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        self.stdout_queue.put(None)
+
+    def _pump_stderr(self, stream: Any) -> None:
+        for line in stream:
+            self.stderr_tail.append(line.rstrip())
+
+    def _start(self, timeout: int) -> None:
+        if self.process is not None and self.process.poll() is None:
+            return
+        self.stop()
+        self.stdout_queue = queue.Queue()
+        self.stderr_tail = deque(maxlen=40)
+        self.process = subprocess.Popen(
+            [
+                self.executable,
+                "app-server",
+                "--stdio",
+                "--disable",
+                "apps",
+                "--disable",
+                "browser_use",
+                "--disable",
+                "computer_use",
+                "--disable",
+                "plugins",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+        assert self.process.stdout is not None and self.process.stderr is not None
+        threading.Thread(target=self._pump_stdout, args=(self.process.stdout,), daemon=True).start()
+        threading.Thread(target=self._pump_stderr, args=(self.process.stderr,), daemon=True).start()
+        response = self._request(
+            "initialize",
+            {"clientInfo": {"name": "openrqgm", "version": "1"}},
+            time.monotonic() + timeout,
+        )
+        if "error" in response:
+            raise ModelCallError(f"Codex app-server initialize failed: {response['error']}")
+        self._notify("initialized", {})
+        self.call_count = 0
+
+    def _write(self, message: dict[str, Any]) -> None:
+        if self.process is None or self.process.stdin is None or self.process.poll() is not None:
+            raise ModelCallError("Codex app-server is not running")
+        self.process.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
+        self.process.stdin.flush()
+
+    def _notify(self, method: str, params: dict[str, Any]) -> None:
+        self._write({"method": method, "params": params})
+
+    def _next_message(self, deadline: float) -> dict[str, Any]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ModelCallError("Codex app-server request timed out")
+        try:
+            message = self.stdout_queue.get(timeout=remaining)
+        except queue.Empty as error:
+            raise ModelCallError("Codex app-server request timed out") from error
+        if message is None:
+            tail = "\n".join(self.stderr_tail)[-1200:]
+            raise ModelCallError(f"Codex app-server exited unexpectedly: {tail}")
+        return message
+
+    def _request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        deadline: float,
+        observe: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        self.request_id += 1
+        request_id = self.request_id
+        self._write({"id": request_id, "method": method, "params": params})
+        while True:
+            message = self._next_message(deadline)
+            if observe is not None:
+                observe(message)
+            if message.get("id") == request_id:
+                return message
+
+    @staticmethod
+    def _usage_fields(usage: dict[str, Any]) -> dict[str, int]:
+        mapping = {
+            "totalTokens": "raw_total_tokens",
+            "inputTokens": "input_tokens",
+            "cachedInputTokens": "cached_input_tokens",
+            "cacheWriteInputTokens": "cache_write_input_tokens",
+            "outputTokens": "output_tokens",
+            "reasoningOutputTokens": "reasoning_output_tokens",
+        }
+        result = {
+            target: int(usage.get(source, 0))
+            for source, target in mapping.items()
+            if isinstance(usage.get(source), int)
+        }
+        result["blended_tokens"] = result.get("input_tokens", 0) + 5 * result.get(
+            "output_tokens", 0
+        )
+        return result
+
+    def call(
+        self,
+        prompt: str,
+        schema: dict[str, Any],
+        model: str,
+        reasoning_effort: str | None,
+        workdir: Path,
+        timeout: int,
+    ) -> tuple[dict[str, Any], dict[str, int]]:
+        with self.lock:
+            deadline = time.monotonic() + timeout
+            try:
+                self._start(timeout)
+                thread_response = self._request(
+                    "thread/start",
+                    {
+                        "model": model,
+                        "cwd": str(workdir),
+                        "approvalPolicy": "never",
+                        "sandbox": "read-only",
+                        "ephemeral": True,
+                        "config": {"model_reasoning_effort": reasoning_effort or "low"},
+                    },
+                    deadline,
+                )
+                if "error" in thread_response:
+                    raise ModelCallError(str(thread_response["error"]))
+                thread_id = thread_response["result"]["thread"]["id"]
+                usage: dict[str, int] = {}
+
+                def observe(message: dict[str, Any]) -> None:
+                    nonlocal usage
+                    if message.get("method") == "thread/tokenUsage/updated":
+                        raw = message.get("params", {}).get("tokenUsage", {}).get("last", {})
+                        usage = self._usage_fields(raw)
+
+                turn_response = self._request(
+                    "turn/start",
+                    {
+                        "threadId": thread_id,
+                        "input": [{"type": "text", "text": prompt}],
+                        "model": model,
+                        "effort": reasoning_effort,
+                        "outputSchema": schema,
+                    },
+                    deadline,
+                    observe,
+                )
+                if "error" in turn_response:
+                    raise ModelCallError(str(turn_response["error"]))
+                turn_id = turn_response["result"]["turn"]["id"]
+                completed: dict[str, Any] | None = None
+                while completed is None:
+                    message = self._next_message(deadline)
+                    observe(message)
+                    if (
+                        message.get("method") == "turn/completed"
+                        and message.get("params", {}).get("turn", {}).get("id") == turn_id
+                    ):
+                        completed = message["params"]["turn"]
+                if completed.get("status") != "completed":
+                    raise ModelCallError(
+                        f"Codex turn failed: {completed.get('error') or completed.get('status')}"
+                    )
+                texts = [
+                    item["text"]
+                    for item in completed.get("items", [])
+                    if item.get("type") == "agentMessage" and item.get("phase") == "final_answer"
+                ]
+                if not texts:
+                    raise ModelCallError("Codex turn completed without a final answer")
+                try:
+                    result = json.loads(texts[-1])
+                except json.JSONDecodeError as error:
+                    raise ModelCallError("Codex returned invalid structured output") from error
+                self.call_count += 1
+                if self.call_count >= self.max_calls:
+                    self.stop()
+                return result, usage
+            except (OSError, BrokenPipeError, KeyError, TypeError) as error:
+                tail = "\n".join(self.stderr_tail)[-1200:]
+                self.stop()
+                raise ModelCallError(f"Codex app-server failure: {error}; {tail}") from error
+            except ModelCallError:
+                self.stop()
+                raise
+
+    def stop(self) -> None:
+        process, self.process = self.process, None
+        if process is None:
+            return
+        if process.stdin is not None:
+            with suppress(OSError):
+                process.stdin.close()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+
+
+@dataclass(slots=True)
+class CodexAppServer:
+    model: str
+    timeout: int
+    workdir: Path
+    ledger_path: Path | None = None
+    reasoning_effort: str | None = None
+    concurrency: int = 4
+    worker_max_calls: int = 200
+    calls: list[dict[str, Any]] = field(default_factory=list)
+    workers: list[AppServerWorker] = field(default_factory=list)
+    available: asyncio.Queue[AppServerWorker] | None = None
+    record_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def __post_init__(self) -> None:
+        if self.concurrency <= 0:
+            raise ValueError("model concurrency must be positive")
+        if self.ledger_path is not None and self.ledger_path.exists():
+            for line in self.ledger_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict):
+                    self.calls.append(event)
+
+    def _record_call(self, event: dict[str, Any]) -> None:
+        with self.record_lock:
+            self.calls.append(event)
+            if self.ledger_path is None:
+                return
+            self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.ledger_path.open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(json.dumps(event, sort_keys=True) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+
+    def _ensure_pool(self) -> asyncio.Queue[AppServerWorker]:
+        if self.available is None:
+            executable = find_codex_executable()
+            self.workers = [
+                AppServerWorker(executable, self.worker_max_calls) for _ in range(self.concurrency)
+            ]
+            self.available = asyncio.Queue()
+            for worker in self.workers:
+                self.available.put_nowait(worker)
+        return self.available
+
+    async def json(self, prompt: str, schema: dict[str, Any], purpose: str) -> dict[str, Any]:
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        last_error: ModelCallError | None = None
+        for attempt in range(3):
+            worker = await self._ensure_pool().get()
+            print(f"[model:start] {purpose} backend=app-server", flush=True)
+            started = time.monotonic()
+            try:
+                result, usage = await asyncio.to_thread(
+                    worker.call,
+                    prompt,
+                    schema,
+                    self.model,
+                    self.reasoning_effort,
+                    self.workdir,
+                    self.timeout,
+                )
+                event: dict[str, Any] = {
+                    "purpose": purpose,
+                    "model": self.model,
+                    "reasoning_effort": self.reasoning_effort,
+                    "backend": "app-server",
+                    "returncode": 0,
+                    "prompt_sha256": canonical_hash(prompt),
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                    **usage,
+                }
+                self._record_call(event)
+                print(f"[model:done] {purpose} rc=0 backend=app-server", flush=True)
+                return result
+            except ModelCallError as error:
+                last_error = error
+                self._record_call(
+                    {
+                        "purpose": purpose,
+                        "model": self.model,
+                        "reasoning_effort": self.reasoning_effort,
+                        "backend": "app-server",
+                        "returncode": 1,
+                        "prompt_sha256": canonical_hash(prompt),
+                        "elapsed_seconds": round(time.monotonic() - started, 3),
+                        "error": str(error)[-1200:],
+                    }
+                )
+                print(f"[model:done] {purpose} rc=1 backend=app-server", flush=True)
+            finally:
+                self._ensure_pool().put_nowait(worker)
+            if attempt < 2:
+                await asyncio.sleep(30 * (2**attempt))
+        assert last_error is not None
+        raise last_error
+
+    async def close(self) -> None:
+        await asyncio.gather(*(asyncio.to_thread(worker.stop) for worker in self.workers))
+
+
 @dataclass(slots=True)
 class CodexCli:
     model: str
     timeout: int
     workdir: Path
     ledger_path: Path | None = None
+    reasoning_effort: str | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
+    record_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
         if self.ledger_path is None or not self.ledger_path.exists():
@@ -172,17 +568,27 @@ class CodexCli:
                 self.calls.append(event)
 
     def _record_call(self, event: dict[str, Any]) -> None:
-        self.calls.append(event)
-        if self.ledger_path is None:
-            return
-        self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.ledger_path.open("a", encoding="utf-8", newline="\n") as stream:
-            stream.write(json.dumps(event, sort_keys=True) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
+        with self.record_lock:
+            self.calls.append(event)
+            if self.ledger_path is None:
+                return
+            self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.ledger_path.open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(json.dumps(event, sort_keys=True) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
 
     async def json(self, prompt: str, schema: dict[str, Any], purpose: str) -> dict[str, Any]:
-        return await asyncio.to_thread(self._json_sync, prompt, schema, purpose)
+        last_error: ModelCallError | None = None
+        for attempt in range(3):
+            try:
+                return await asyncio.to_thread(self._json_sync, prompt, schema, purpose)
+            except ModelCallError as error:
+                last_error = error
+                if attempt < 2:
+                    await asyncio.sleep(30 * (2**attempt))
+        assert last_error is not None
+        raise last_error
 
     def _json_sync(self, prompt: str, schema: dict[str, Any], purpose: str) -> dict[str, Any]:
         executable = find_codex_executable()
@@ -211,29 +617,52 @@ class CodexCli:
                 "--json",
                 "-m",
                 self.model,
-                "-C",
-                str(self.workdir),
-                "--output-schema",
-                str(schema_path),
-                "-o",
-                str(output_path),
-                "-",
             ]
+            if self.reasoning_effort:
+                command.extend(["-c", f'model_reasoning_effort="{self.reasoning_effort}"'])
+            command.extend(
+                [
+                    "-C",
+                    str(self.workdir),
+                    "--output-schema",
+                    str(schema_path),
+                    "-o",
+                    str(output_path),
+                    "-",
+                ]
+            )
             print(f"[model:start] {purpose}", flush=True)
             started = time.monotonic()
-            completed = subprocess.run(
-                command,
-                input=prompt,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                capture_output=True,
-                timeout=self.timeout,
-                check=False,
-            )
+            try:
+                completed = subprocess.run(
+                    command,
+                    input=prompt,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    capture_output=True,
+                    timeout=self.timeout,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                self._record_call(
+                    {
+                        "purpose": purpose,
+                        "model": self.model,
+                        "reasoning_effort": self.reasoning_effort,
+                        "returncode": None,
+                        "prompt_sha256": canonical_hash(prompt),
+                        "elapsed_seconds": round(time.monotonic() - started, 3),
+                        "error": "timeout",
+                    }
+                )
+                raise ModelCallError(
+                    f"Codex call timed out for {purpose} after {self.timeout}s"
+                ) from error
             event = {
                 "purpose": purpose,
                 "model": self.model,
+                "reasoning_effort": self.reasoning_effort,
                 "returncode": completed.returncode,
                 "prompt_sha256": canonical_hash(prompt),
                 "elapsed_seconds": round(time.monotonic() - started, 3),
@@ -250,11 +679,16 @@ class CodexCli:
             self._record_call(event)
             print(f"[model:done] {purpose} rc={completed.returncode}", flush=True)
             if completed.returncode != 0 or not output_path.exists():
-                raise RuntimeError(
+                raise ModelCallError(
                     f"Codex call failed for {purpose}: rc={completed.returncode}; "
                     f"stderr_tail={completed.stderr[-600:]}"
                 )
-            return json.loads(output_path.read_text(encoding="utf-8"))
+            try:
+                return json.loads(output_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise ModelCallError(
+                    f"Codex returned invalid structured output for {purpose}"
+                ) from error
 
 
 LABEL_SCHEMA = {
@@ -273,7 +707,7 @@ EXPERIMENT_CONDITIONS = {
 
 @dataclass(slots=True)
 class WorkspaceEditor:
-    client: CodexCli
+    client: CodexCli | CodexAppServer
     agent_runner: AgentWorkspaceRunner
 
     async def edit(self, parent, archive, budget):  # type: ignore[no-untyped-def]
@@ -337,7 +771,7 @@ file that should exist; omitted files are deleted."""
 
 @dataclass(slots=True)
 class CodingTaskEvaluator:
-    client: CodexCli
+    client: CodexCli | CodexAppServer
     runner: DockerPolyglotRunner
     agent_runner: AgentWorkspaceRunner
     validation_tasks: list[PolyglotTask]
@@ -345,6 +779,11 @@ class CodingTaskEvaluator:
     random_seed: int
     repair_attempts: int = 1
     fixed_evaluator: EvaluatorCandidate | None = None
+    parallelism: int = 1
+
+    def __post_init__(self) -> None:
+        if self.parallelism <= 0:
+            raise ValueError("task parallelism must be positive")
 
     def _task_material(self, task: PolyglotTask) -> dict[str, Any]:
         return task_material(task)
@@ -543,24 +982,24 @@ class CodingTaskEvaluator:
         tasks: Sequence[PolyglotTask],
         count: int,
     ) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
         ordered = self._ordered_tasks(node.node_id, tasks, "training")
-        for task in ordered[:count]:
+        semaphore = asyncio.Semaphore(self.parallelism)
+
+        async def generate(task: PolyglotTask) -> dict[str, Any]:
             try:
-                artifact = await self._generate_artifact(
-                    node,
-                    task,
-                    phase="training",
-                    purpose_prefix="coder-training",
-                )
-                results.append(
-                    {
-                        "task": task.task_id,
-                        "outcome": artifact["test_outcome"],
-                        "attempts": artifact["attempts"],
-                        "sandbox": artifact["sandbox"],
-                    }
-                )
+                async with semaphore:
+                    artifact = await self._generate_artifact(
+                        node,
+                        task,
+                        phase="training",
+                        purpose_prefix="coder-training",
+                    )
+                return {
+                    "task": task.task_id,
+                    "outcome": artifact["test_outcome"],
+                    "attempts": artifact["attempts"],
+                    "sandbox": artifact["sandbox"],
+                }
             except (
                 OSError,
                 RuntimeError,
@@ -568,31 +1007,32 @@ class CodingTaskEvaluator:
                 ValueError,
                 json.JSONDecodeError,
             ) as error:
-                results.append({"task": task.task_id, "outcome": 0, "error": type(error).__name__})
-        return results
+                return {"task": task.task_id, "outcome": 0, "error": type(error).__name__}
+
+        return list(await asyncio.gather(*(generate(task) for task in ordered[:count])))
 
     async def heldout_results(
         self,
         node: WorkspaceNode,
         tasks: Sequence[PolyglotTask],
     ) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        for task in tasks:
+        semaphore = asyncio.Semaphore(self.parallelism)
+
+        async def generate(task: PolyglotTask) -> dict[str, Any]:
             try:
-                artifact = await self._generate_artifact(
-                    node,
-                    task,
-                    phase="heldout",
-                    purpose_prefix="coder-heldout",
-                )
-                results.append(
-                    {
-                        "task": task.task_id,
-                        "outcome": artifact["test_outcome"],
-                        "attempts": artifact["attempts"],
-                        "sandbox": artifact["sandbox"],
-                    }
-                )
+                async with semaphore:
+                    artifact = await self._generate_artifact(
+                        node,
+                        task,
+                        phase="heldout",
+                        purpose_prefix="coder-heldout",
+                    )
+                return {
+                    "task": task.task_id,
+                    "outcome": artifact["test_outcome"],
+                    "attempts": artifact["attempts"],
+                    "sandbox": artifact["sandbox"],
+                }
             except (
                 OSError,
                 RuntimeError,
@@ -600,8 +1040,9 @@ class CodingTaskEvaluator:
                 ValueError,
                 json.JSONDecodeError,
             ) as error:
-                results.append({"task": task.task_id, "outcome": 0, "error": type(error).__name__})
-        return results
+                return {"task": task.task_id, "outcome": 0, "error": type(error).__name__}
+
+        return list(await asyncio.gather(*(generate(task) for task in tasks)))
 
     async def evaluate(self, node, task, evaluator, cached_artifact, budget):  # type: ignore[no-untyped-def]
         del cached_artifact, budget
@@ -780,15 +1221,21 @@ class PrivateCraveAnchors:
 
 @dataclass(slots=True)
 class BatchedAnchorEvaluator:
-    client: CodexCli
+    client: CodexCli | CodexAppServer
     provider: PrivateCraveAnchors
     agent_runner: AgentWorkspaceRunner
     batch_size: int = 20
+    max_payload_bytes: int = 160_000
+    parallelism: int = 1
     predictions: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.batch_size <= 0:
             raise ValueError("anchor batch size must be positive")
+        if self.parallelism <= 0:
+            raise ValueError("anchor parallelism must be positive")
+        if self.max_payload_bytes <= 0:
+            raise ValueError("anchor payload limit must be positive")
 
     async def _predict(self, candidate: EvaluatorCandidate) -> dict[str, str]:
         examples = await self.provider.examples(candidate.slot_id)
@@ -814,9 +1261,15 @@ class BatchedAnchorEvaluator:
             "required": ["predictions"],
             "additionalProperties": False,
         }
-        predictions: dict[str, str] = {}
-        for start in range(0, len(examples), self.batch_size):
-            batch = examples[start : start + self.batch_size]
+        batches = payload_batches(
+            examples,
+            max_items=self.batch_size,
+            max_payload_bytes=self.max_payload_bytes,
+            payload=lambda example: example.artifact,
+        )
+
+        async def predict_batch(batch_index: int) -> dict[str, str]:
+            batch = batches[batch_index]
             try:
                 prompt = await asyncio.to_thread(
                     self.agent_runner.prompt,
@@ -830,9 +1283,9 @@ class BatchedAnchorEvaluator:
                 result = await self.client.json(
                     prompt,
                     schema,
-                    f"anchor:{candidate.candidate_id}:batch-{start // self.batch_size}",
+                    f"anchor:{candidate.candidate_id}:batch-{batch_index}",
                 )
-                predictions.update({item["id"]: item["label"] for item in result["predictions"]})
+                return {item["id"]: item["label"] for item in result["predictions"]}
             except (
                 OSError,
                 RuntimeError,
@@ -840,7 +1293,19 @@ class BatchedAnchorEvaluator:
                 ValueError,
                 json.JSONDecodeError,
             ):
-                continue
+                return {}
+
+        semaphore = asyncio.Semaphore(self.parallelism)
+
+        async def limited(batch_index: int) -> dict[str, str]:
+            async with semaphore:
+                return await predict_batch(batch_index)
+
+        predictions: dict[str, str] = {}
+        for batch_predictions in await asyncio.gather(
+            *(limited(batch_index) for batch_index in range(len(batches)))
+        ):
+            predictions.update(batch_predictions)
         return predictions
 
     async def evaluate(self, candidate: EvaluatorCandidate, example: AnchorExample) -> int:
@@ -852,12 +1317,13 @@ class BatchedAnchorEvaluator:
 
 @dataclass(slots=True)
 class TrainingFeedback:
-    client: CodexCli
+    client: CodexCli | CodexAppServer
     rows: list[dict[str, Any]]
     reviewer_samples_per_node: int
     coding_evaluator: CodingTaskEvaluator
     coder_tasks: list[PolyglotTask]
     coder_samples_per_node: int
+    max_payload_bytes: int = 160_000
     index: int = 0
 
     async def collect(self, node, tasks, evaluators, budget):  # type: ignore[no-untyped-def]
@@ -890,26 +1356,41 @@ class TrainingFeedback:
             "required": ["predictions"],
             "additionalProperties": False,
         }
-        reviewer_feedback: list[dict[str, Any]] = []
-        if selected:
+
+        async def collect_reviewer() -> list[dict[str, Any]]:
+            reviewer_feedback: list[dict[str, Any]] = []
+            if not selected:
+                return reviewer_feedback
             try:
-                prompt = await asyncio.to_thread(
-                    self.coding_evaluator.agent_runner.prompt,
-                    node.workspace,
-                    "reviewer",
-                    {
-                        "examples": [
-                            review_example(example_id, row) for example_id, row in selected
-                        ],
-                        "response_contract": "Return a prediction for every id without reordering.",
-                    },
+                predictions: dict[str, str] = {}
+                batches = payload_batches(
+                    selected,
+                    max_items=max(1, self.reviewer_samples_per_node),
+                    max_payload_bytes=self.max_payload_bytes,
+                    payload=lambda item: review_example(item[0], item[1]),
                 )
-                result = await self.client.json(
-                    prompt,
-                    schema,
-                    f"crave-training:{selected[0][0]}..{selected[-1][0]}",
-                )
-                predictions = {item["id"]: item["label"] for item in result["predictions"]}
+                for batch_index, batch in enumerate(batches):
+                    prompt = await asyncio.to_thread(
+                        self.coding_evaluator.agent_runner.prompt,
+                        node.workspace,
+                        "reviewer",
+                        {
+                            "examples": [
+                                review_example(example_id, row) for example_id, row in batch
+                            ],
+                            "response_contract": (
+                                "Return a prediction for every id without reordering."
+                            ),
+                        },
+                    )
+                    result = await self.client.json(
+                        prompt,
+                        schema,
+                        f"crave-training:batch-{batch_index}:{batch[0][0]}..{batch[-1][0]}",
+                    )
+                    predictions.update(
+                        {item["id"]: item["label"] for item in result["predictions"]}
+                    )
                 for example_id, row in selected:
                     prediction = predictions.get(example_id)
                     reviewer_feedback.append(
@@ -928,7 +1409,7 @@ class TrainingFeedback:
                 ValueError,
                 json.JSONDecodeError,
             ) as error:
-                reviewer_feedback = [
+                return [
                     {
                         "task": "reviewer-crave-training",
                         "example_id": example_id,
@@ -936,10 +1417,15 @@ class TrainingFeedback:
                     }
                     for example_id, _ in selected
                 ]
-        coder_feedback = await self.coding_evaluator.training_samples(
-            node,
-            self.coder_tasks,
-            self.coder_samples_per_node,
+            return reviewer_feedback
+
+        reviewer_feedback, coder_feedback = await asyncio.gather(
+            collect_reviewer(),
+            self.coding_evaluator.training_samples(
+                node,
+                self.coder_tasks,
+                self.coder_samples_per_node,
+            ),
         )
         return {
             "reviewer_samples": reviewer_feedback,
@@ -1032,28 +1518,51 @@ def condition_components(
 
 
 def build_engine(
-    config: dict[str, Any], client: CodexCli
+    config: dict[str, Any], client: CodexCli | CodexAppServer
 ) -> tuple[RQGM, CodingTaskEvaluator, list[PolyglotTask]]:
     condition = config.get("experiment_condition", "coevolving_reviewer")
     seed = int(config["random_seed"])
-    coder_train_tasks, validation_tasks, heldout_tasks = split_balanced(
-        POLYGLOT,
-        seed,
-        int(config["polyglot_train_tasks_per_language"]),
-        int(config["polyglot_validation_tasks_per_language"]),
-        int(config["polyglot_test_tasks_per_language"]),
+    if "polyglot_train_tasks" in config:
+        coder_train_tasks, validation_tasks, heldout_tasks = split_counts(
+            POLYGLOT,
+            seed,
+            int(config["polyglot_train_tasks"]),
+            int(config["polyglot_validation_tasks"]),
+            int(config["polyglot_test_tasks"]),
+        )
+    else:
+        coder_train_tasks, validation_tasks, heldout_tasks = split_balanced(
+            POLYGLOT,
+            seed,
+            int(config["polyglot_train_tasks_per_language"]),
+            int(config["polyglot_validation_tasks_per_language"]),
+            int(config["polyglot_test_tasks_per_language"]),
+        )
+    crave_example_max_bytes = int(config.get("crave_example_max_bytes", 80_000))
+    crave_prompt_max_bytes = int(config.get("crave_prompt_max_bytes", 160_000))
+    crave_train_rows = context_eligible_rows(load_rows("train"), crave_example_max_bytes)
+    crave_train_count = config.get("crave_training_pool_examples", 32)
+    crave_train = (
+        sample_rows(crave_train_rows, len(crave_train_rows), seed + 1)
+        if crave_train_count == "all"
+        else sample_rows(crave_train_rows, int(crave_train_count), seed + 1)
     )
-    crave_train = sample_rows(load_rows("train"), 32, seed + 1)
     crave_validation = sample_rows(
-        load_rows("validation"), int(config["crave_validation_examples"]), seed + 2
+        context_eligible_rows(load_rows("validation"), crave_example_max_bytes),
+        int(config["crave_validation_examples"]),
+        seed + 2,
     )
-    crave_anchors = sample_rows(load_rows("test"), int(config["crave_anchor_examples"]), seed + 3)
+    crave_anchors = sample_rows(
+        context_eligible_rows(load_rows("test"), crave_example_max_bytes),
+        int(config["crave_anchor_examples"]),
+        seed + 3,
+    )
     provider = PrivateCraveAnchors(crave_anchors)
     images = config.get("polyglot_images", DEFAULT_IMAGES)
     agent_runner = AgentWorkspaceRunner(
         int(config["agent_timeout_seconds"]), config.get("agent_image", "python:3.12-slim")
     )
-    initial_workspace = seed_workspace()
+    initial_workspace = seed_workspace(config.get("seed_workspace_profile", "reconstruction_v3"))
     validate_workspace(initial_workspace)
     incumbent = EvaluatorCandidate.create(
         "code-reviewer",
@@ -1065,14 +1574,15 @@ def build_engine(
         condition, incumbent
     )
     task_evaluator = CodingTaskEvaluator(
-        client,
-        DockerPolyglotRunner(int(config["container_timeout_seconds"]), images),
-        agent_runner,
-        validation_tasks,
-        crave_validation,
-        seed + 4,
-        int(config["coder_repair_attempts"]),
-        fixed_evaluator,
+        client=client,
+        runner=DockerPolyglotRunner(int(config["container_timeout_seconds"]), images),
+        agent_runner=agent_runner,
+        validation_tasks=validation_tasks,
+        crave_validation=crave_validation,
+        random_seed=seed + 4,
+        repair_attempts=int(config["coder_repair_attempts"]),
+        fixed_evaluator=fixed_evaluator,
+        parallelism=int(config.get("task_concurrency", 1)),
     )
     engine = RQGM(
         seed_workspace=initial_workspace,
@@ -1084,10 +1594,12 @@ def build_engine(
             challenger_source=challenger_source,
             anchor_provider=provider,
             anchor_evaluator=BatchedAnchorEvaluator(
-                client,
-                provider,
-                agent_runner,
-                int(config.get("anchor_batch_size", len(crave_anchors))),
+                client=client,
+                provider=provider,
+                agent_runner=agent_runner,
+                batch_size=int(config.get("anchor_batch_size", len(crave_anchors))),
+                max_payload_bytes=crave_prompt_max_bytes,
+                parallelism=int(config.get("anchor_concurrency", 1)),
             ),
             training_feedback=TrainingFeedback(
                 client,
@@ -1096,6 +1608,7 @@ def build_engine(
                 task_evaluator,
                 coder_train_tasks,
                 int(config["coder_training_samples_per_node"]),
+                crave_prompt_max_bytes,
             ),
         ),
         config=RQGMConfig(
@@ -1117,11 +1630,22 @@ async def execute(config_path: Path) -> None:
     state_path = output / "state.json"
     metadata_path = output / "run-metadata.json"
     progress_path = output / "runtime-progress.json"
-    client = CodexCli(
-        config["model"],
-        int(config["model_timeout_seconds"]),
-        DATA / "codex-empty",
-        output / "model-calls.jsonl",
+    client_class = (
+        CodexAppServer if config.get("model_backend", "cli") == "app_server" else CodexCli
+    )
+    client_options: dict[str, Any] = {}
+    if client_class is CodexAppServer:
+        client_options = {
+            "concurrency": int(config.get("model_concurrency", 4)),
+            "worker_max_calls": int(config.get("persistent_worker_max_calls", 200)),
+        }
+    client = client_class(
+        model=config["model"],
+        timeout=int(config["model_timeout_seconds"]),
+        workdir=DATA / "codex-empty",
+        ledger_path=output / "model-calls.jsonl",
+        reasoning_effort=config.get("reasoning_effort"),
+        **client_options,
     )
     engine, task_evaluator, heldout_tasks = build_engine(config, client)
     prior_wall_seconds = 0.0
@@ -1146,6 +1670,8 @@ async def execute(config_path: Path) -> None:
         "condition": config.get("experiment_condition", "coevolving_reviewer"),
         "config_fingerprint": canonical_hash(config),
         "data_split_fingerprint": canonical_hash(data_split),
+        "crave_training_fingerprint": canonical_hash(engine.runtime.training_feedback.rows),
+        "crave_validation_fingerprint": canonical_hash(task_evaluator.crave_validation),
         "anchor_fingerprint": engine.runtime.anchor_provider.fingerprint,
         "source": source_identity(),
     }
@@ -1218,6 +1744,8 @@ async def execute(config_path: Path) -> None:
         "source": source_identity(),
         "config_fingerprint": canonical_hash(config),
         "data_split_fingerprint": canonical_hash(data_split),
+        "crave_training_fingerprint": canonical_hash(engine.runtime.training_feedback.rows),
+        "crave_validation_fingerprint": canonical_hash(task_evaluator.crave_validation),
         "result": asdict(result),
         "anchor_provider": {
             "provider_id": engine.runtime.anchor_provider.provider_id,
@@ -1237,18 +1765,20 @@ async def execute(config_path: Path) -> None:
         "paper_comparison_valid": False,
         "paper_reported_rqgm_endpoint": "119/166",
         "wall_time_seconds": round(progress_observer.active_wall_seconds(), 3),
-        "limitations": [
-            "paper split and production prompts are unpublished",
-            "gpt-5.6-sol differs from the paper's GPT-5 low endpoint",
-            "anchor inference is batched as a declared cost-saving approximation",
-            "the meta-agent may modify the complete sandboxed agent codebase but not the "
-            "trusted RQGM engine, private anchors, benchmark data, or sandbox boundary",
-            "public Aider Polyglot tasks are balanced across six languages; this is not the "
-            "paper's unpublished exact split",
-        ],
+        "limitations": config.get(
+            "limitations",
+            [
+                "the paper's exact task identities and production harness are unpublished",
+                "the model provider revision and complete per-role prompts are unavailable",
+                "the public adapter uses bounded generate-test-repair calls instead of "
+                "the paper's exact tool loop",
+            ],
+        ),
     }
     atomic_json(output / "summary.json", summary)
     save_state(engine, output / "state.json")
+    if isinstance(client, CodexAppServer):
+        await client.close()
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 

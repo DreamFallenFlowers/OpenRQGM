@@ -1,10 +1,12 @@
 {
-  "claim": "paper-scale target manifest; not runnable as an exact reproduction without unpublished assets",
-  "model": "gpt-5-low",
+  "claim": "paper-v2 target manifest; exact empirical replication still requires unpublished assets",
+  "paper_version": "arXiv:2606.26294v2",
+  "model": "gpt-5.5",
+  "reasoning_effort": "low",
   "validation_budget": 12288,
   "checkpoint_schedule": {
     "ratio": 2,
-    "first_checkpoint": "not specified in the RQGM paper; inherited HGM setting required"
+    "first_checkpoint": "not specified in the RQGM paper; the runnable public reconstruction preregisters 8"
   },
   "epsilon": 0.05,
   "expansion_alpha": 0.6,
@@ -19,6 +21,23 @@
     "exact_paper_split_available": false
   },
   "crave_anchor_size": 100,
+  "published_runtime": {
+    "output_tokens_per_call": 32768,
+    "run_timeout_seconds": 86400,
+    "evaluation_timeout_seconds": 1200,
+    "llm_timeout_seconds": 300,
+    "shell_timeout_seconds": 120,
+    "coder_tool_calls_per_task": 16,
+    "meta_agent_tool_calls_per_turn": 40
+  },
+  "published_caps": {
+    "expand_usd": 25,
+    "expand_seconds": 1200,
+    "train_usd": 8,
+    "train_seconds": 900,
+    "validation_usd": 25,
+    "validation_seconds": 1200
+  },
   "reported_endpoint": {
     "rqgm_specialist": "119/166",
     "rqgm_generalist": "119/166",
