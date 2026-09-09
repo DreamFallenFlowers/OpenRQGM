@@ -107,7 +107,10 @@ measurements.
 
 The cyan loop grows and measures agent workspaces. The violet loop proposes and
 selects learned evaluators, while the amber path represents the private-anchor
-guardrail and selective erasure after a replacement.
+guardrail and selective erasure after a replacement. This is an
+implementation-oriented redraw of the paper's method; see
+[Figure 2 in the original paper](https://arxiv.org/pdf/2606.26294#page=4) for
+the authors' role-and-task-level presentation.
 
 The endpoint policy returns both a balanced generalist and the strongest
 per-role specialists. See [Algorithm 1 correspondence](docs/algorithm-correspondence.md)
