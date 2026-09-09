@@ -101,26 +101,13 @@ At evaluator checkpoints, challengers are judged on private anchors; accepted
 replacements advance the evaluator epoch and invalidate only affected cached
 measurements.
 
-```mermaid
-flowchart TD
-    A[Seed multi-role workspace] --> B{UCB-Air expand gate}
-    B -- expand --> C[CMP Thompson-select parent]
-    C --> D[Meta-agent edits workspace]
-    D --> E[Training feedback]
-    B -- measure --> F[CMP Thompson-select node]
-    E --> F
-    F --> G[Role-first, task-second validation]
-    G --> H[Fixed or learned evaluation cell]
-    H --> I[Cache validation outcome]
-    I --> J{Evaluator checkpoint?}
-    J -- no --> B
-    J -- yes --> K[Evaluate challengers on private anchors]
-    K --> L[Epsilon-best-belief replacement]
-    L --> M[Atomic slot update]
-    M --> N[Slot-local selective erasure]
-    N --> B
-    B -- budget exhausted --> O[Generalist and specialist endpoints]
-```
+<p align="center">
+  <img src="assets/openrqgm-architecture.svg" width="100%" alt="OpenRQGM architecture showing the coupled agent-evolution and evaluator-evolution loops, private-anchor replacement, selective erasure, and selected endpoints">
+</p>
+
+The cyan loop grows and measures agent workspaces. The violet loop proposes and
+selects learned evaluators, while the amber path represents the private-anchor
+guardrail and selective erasure after a replacement.
 
 The endpoint policy returns both a balanced generalist and the strongest
 per-role specialists. See [Algorithm 1 correspondence](docs/algorithm-correspondence.md)
