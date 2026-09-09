@@ -40,9 +40,9 @@
       .body { font-size: 14px; font-weight: 450; fill: #afbdd2; }
       .label { font-size: 13px; font-weight: 650; }
       .chip { font-size: 12px; font-weight: 720; letter-spacing: 0.4px; }
-      .cyan-line { fill: none; stroke: #46ddd8; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; marker-end: url(#cyanArrow); }
-      .violet-line { fill: none; stroke: #9a8cff; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; marker-end: url(#violetArrow); }
-      .amber-line { fill: none; stroke: #ffc968; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; marker-end: url(#amberArrow); }
+      .cyan-line { fill: none; stroke: #46ddd8; stroke-width: 3; stroke-dasharray: 12 10; stroke-linejoin: round; stroke-linecap: round; marker-end: url(#cyanArrow); }
+      .violet-line { fill: none; stroke: #9a8cff; stroke-width: 3; stroke-dasharray: 12 10; stroke-linejoin: round; stroke-linecap: round; marker-end: url(#violetArrow); }
+      .amber-line { fill: none; stroke: #ffc968; stroke-width: 3; stroke-dasharray: 12 10; stroke-linejoin: round; stroke-linecap: round; marker-end: url(#amberArrow); }
     </style>
   </defs>
 
@@ -62,35 +62,35 @@
     <text x="98" y="633" class="lane-title" fill="#b5aaff">EVALUATOR CHECKPOINT · BETWEEN EPOCHS</text>
 
     <!-- Upper lane cards -->
-    <rect x="88" y="268" width="190" height="104" rx="16" fill="#101e33" stroke="#2c5368"/>
-    <text x="112" y="302" class="card-title">Seed workspace</text>
-    <text x="112" y="330" class="body">Multi-role agents</text>
-    <text x="112" y="352" class="body">Shared editable codebase</text>
+    <rect x="78" y="268" width="180" height="104" rx="16" fill="#101e33" stroke="#2c5368"/>
+    <text x="102" y="302" class="card-title">Seed workspace</text>
+    <text x="102" y="330" class="body">Multi-role agents</text>
+    <text x="102" y="352" class="body">Shared editable codebase</text>
 
-    <rect x="338" y="228" width="242" height="184" rx="19" fill="#123246" stroke="#33adb1" stroke-width="1.5" filter="url(#shadow)"/>
-    <text x="364" y="263" class="card-title">Tree archive</text>
-    <text x="364" y="287" class="body">Workspace lineage + utility</text>
-    <path d="M459 315V340M459 340L410 372M459 340L459 372M459 340L508 372" fill="none" stroke="#56dfda" stroke-width="2.3"/>
-    <circle cx="459" cy="304" r="13" fill="#46ddd8"/>
-    <circle cx="410" cy="383" r="11" fill="#203f59" stroke="#6ce8e3" stroke-width="2"/>
-    <circle cx="459" cy="383" r="11" fill="#203f59" stroke="#6ce8e3" stroke-width="2"/>
-    <circle cx="508" cy="383" r="11" fill="#203f59" stroke="#6ce8e3" stroke-width="2"/>
+    <rect x="330" y="228" width="240" height="184" rx="19" fill="#123246" stroke="#33adb1" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="356" y="263" class="card-title">Tree archive</text>
+    <text x="356" y="287" class="body">Workspace lineage + utility</text>
+    <path d="M450 315V340M450 340L401 372M450 340L450 372M450 340L499 372" fill="none" stroke="#56dfda" stroke-width="2.3"/>
+    <circle cx="450" cy="304" r="13" fill="#46ddd8"/>
+    <circle cx="401" cy="383" r="11" fill="#203f59" stroke="#6ce8e3" stroke-width="2"/>
+    <circle cx="450" cy="383" r="11" fill="#203f59" stroke="#6ce8e3" stroke-width="2"/>
+    <circle cx="499" cy="383" r="11" fill="#203f59" stroke="#6ce8e3" stroke-width="2"/>
 
     <!-- UCB-Air decision -->
-    <path d="M670 252L736 320L670 388L604 320Z" fill="#123849" stroke="#46ddd8" stroke-width="1.8" filter="url(#shadow)"/>
-    <text x="670" y="315" class="card-title" text-anchor="middle">UCB-Air</text>
-    <text x="670" y="339" class="body" text-anchor="middle">search gate</text>
+    <path d="M680 252L746 320L680 388L614 320Z" fill="#123849" stroke="#46ddd8" stroke-width="1.8" filter="url(#shadow)"/>
+    <text x="680" y="315" class="card-title" text-anchor="middle">UCB-Air</text>
+    <text x="680" y="339" class="body" text-anchor="middle">search gate</text>
 
-    <rect x="782" y="184" width="226" height="104" rx="16" fill="#101e33" stroke="#2c5368"/>
-    <text x="808" y="219" class="card-title">Meta-agent edit</text>
-    <text x="808" y="247" class="body">CMP-select parent</text>
-    <text x="808" y="269" class="body">Create a child workspace</text>
+    <rect x="800" y="184" width="226" height="104" rx="16" fill="#101e33" stroke="#2c5368"/>
+    <text x="826" y="219" class="card-title">Meta-agent edit</text>
+    <text x="826" y="247" class="body">CMP-select parent</text>
+    <text x="826" y="269" class="body">Create a child workspace</text>
 
-    <rect x="1048" y="184" width="300" height="104" rx="18" fill="url(#endpoint)" filter="url(#shadow)"/>
-    <text x="1198" y="222" class="card-title" text-anchor="middle">Selected endpoints</text>
-    <text x="1198" y="252" class="body" fill="#eefeff" text-anchor="middle">Generalist · per-role specialists</text>
-    <rect x="1138" y="260" width="120" height="20" rx="10" fill="#16264b" opacity="0.72"/>
-    <text x="1198" y="274" class="chip" fill="#dce9ff" text-anchor="middle">BEST-BELIEF</text>
+    <rect x="1090" y="184" width="270" height="104" rx="18" fill="url(#endpoint)" filter="url(#shadow)"/>
+    <text x="1225" y="222" class="card-title" text-anchor="middle">Selected endpoints</text>
+    <text x="1225" y="252" class="body" fill="#eefeff" text-anchor="middle">Generalist · per-role specialists</text>
+    <rect x="1165" y="260" width="120" height="20" rx="10" fill="#16264b" opacity="0.72"/>
+    <text x="1225" y="274" class="chip" fill="#dce9ff" text-anchor="middle">BEST-BELIEF</text>
 
     <rect x="1048" y="354" width="226" height="120" rx="16" fill="#101e33" stroke="#2c5368"/>
     <text x="1074" y="389" class="card-title">Validation</text>
@@ -99,23 +99,23 @@
     <rect x="1074" y="447" width="150" height="20" rx="10" fill="#15434d"/>
     <text x="1149" y="461" class="chip" fill="#70e9e3" text-anchor="middle">BINARY OUTCOME</text>
 
-    <rect x="1320" y="354" width="188" height="120" rx="16" fill="#101e33" stroke="#2c5368"/>
-    <text x="1346" y="389" class="card-title">Evidence cache</text>
-    <text x="1346" y="417" class="body">Artifacts + outcomes</text>
-    <text x="1346" y="439" class="body">Stamped by epoch</text>
+    <rect x="1340" y="354" width="168" height="120" rx="16" fill="#101e33" stroke="#2c5368"/>
+    <text x="1364" y="389" class="card-title">Evidence cache</text>
+    <text x="1364" y="417" class="body">Artifacts + outcomes</text>
+    <text x="1364" y="439" class="body">Stamped by epoch</text>
 
     <!-- Upper lane connections: dedicated, non-crossing routes -->
-    <path d="M278 320H324" class="cyan-line"/>
-    <path d="M580 320H590" class="cyan-line"/>
-    <path d="M712 276L768 239" class="cyan-line"/>
-    <text x="733" y="246" class="label" fill="#75eae5">expand</text>
-    <path d="M895 184V157H459V214" class="cyan-line"/>
-    <text x="680" y="151" class="label" fill="#75eae5" text-anchor="middle">add child to archive</text>
-    <path d="M718 361L1034 408" class="cyan-line"/>
-    <text x="842" y="374" class="label" fill="#75eae5">measure</text>
-    <path d="M736 320H1024V236H1034" class="cyan-line"/>
-    <text x="876" y="311" class="label" fill="#75eae5" text-anchor="middle">budget exhausted</text>
-    <path d="M1274 414H1306" class="cyan-line"/>
+    <path d="M258 320H316" class="cyan-line"/>
+    <path d="M570 320H600" class="cyan-line"/>
+    <path d="M722 276L786 239" class="cyan-line"/>
+    <text x="744" y="222" class="label" fill="#75eae5">expand</text>
+    <path d="M913 184V157H450V214" class="cyan-line"/>
+    <text x="682" y="151" class="label" fill="#75eae5" text-anchor="middle">add child to archive</text>
+    <path d="M728 361L1034 408" class="cyan-line"/>
+    <text x="852" y="374" class="label" fill="#75eae5">measure</text>
+    <path d="M746 320H1050V236H1076" class="cyan-line"/>
+    <text x="890" y="311" class="label" fill="#75eae5" text-anchor="middle">budget exhausted</text>
+    <path d="M1274 414H1326" class="cyan-line"/>
 
     <!-- Lower lane inputs -->
     <rect x="90" y="660" width="236" height="100" rx="16" fill="#171a35" stroke="#594b8b"/>

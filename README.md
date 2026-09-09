@@ -102,8 +102,10 @@ replacements advance the evaluator epoch and invalidate only affected cached
 measurements.
 
 <p align="center">
-  <img src="assets/openrqgm-architecture.svg" width="100%" alt="OpenRQGM architecture showing the coupled agent-evolution and evaluator-evolution loops, private-anchor replacement, selective erasure, and selected endpoints">
+  <img src="assets/openrqgm-architecture.gif" width="100%" alt="Animated OpenRQGM architecture showing the direction of agent search, evaluator replacement, and selective cache invalidation">
 </p>
+
+<p align="center"><a href="assets/openrqgm-architecture.svg">View static SVG</a></p>
 
 The cyan loop grows and measures agent workspaces. The violet loop proposes and
 selects learned evaluators, while the amber path represents the private-anchor
