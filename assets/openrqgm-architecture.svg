@@ -1,174 +1,169 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="920" viewBox="0 0 1600 920" role="img" aria-labelledby="title desc">
-  <title id="title">OpenRQGM agent and evaluator co-evolution architecture</title>
-  <desc id="desc">A two-loop architecture diagram. The agent loop expands and validates a tree archive. The evaluator loop proposes challengers, evaluates them on private anchors, atomically replaces evaluator slots, and selectively erases affected cached measurements. The archive returns generalist and specialist endpoints.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980" role="img" aria-labelledby="title desc">
+  <title id="title">OpenRQGM co-evolution architecture</title>
+  <desc id="desc">A clean two-lane diagram. The upper lane shows archive search branching through UCB-Air into expansion, validation, or endpoint selection. The lower lane shows evaluator challengers and private anchors entering a replacement decision, followed by an atomic transition, frozen evaluator slots, and selective erasure. Two vertical arrows connect evaluator slots to validation and selective erasure to cached evidence.</desc>
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#07111f"/>
-      <stop offset="0.55" stop-color="#0b1730"/>
-      <stop offset="1" stop-color="#10132b"/>
+      <stop offset="0.55" stop-color="#0a1730"/>
+      <stop offset="1" stop-color="#11142c"/>
     </linearGradient>
-    <linearGradient id="agentPanel" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#10283b" stop-opacity="0.96"/>
-      <stop offset="1" stop-color="#0c1c31" stop-opacity="0.96"/>
+    <linearGradient id="agentLane" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e293a"/>
+      <stop offset="1" stop-color="#0b1d31"/>
     </linearGradient>
-    <linearGradient id="evalPanel" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#21183d" stop-opacity="0.96"/>
-      <stop offset="1" stop-color="#12182f" stop-opacity="0.96"/>
-    </linearGradient>
-    <linearGradient id="archiveCard" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#123b4b"/>
-      <stop offset="1" stop-color="#15254a"/>
+    <linearGradient id="evaluatorLane" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f193b"/>
+      <stop offset="1" stop-color="#12172e"/>
     </linearGradient>
     <linearGradient id="endpoint" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#1ac8c8"/>
-      <stop offset="1" stop-color="#7a6cf6"/>
+      <stop offset="0" stop-color="#20c8ca"/>
+      <stop offset="1" stop-color="#7568f4"/>
     </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
-      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000814" flood-opacity="0.42"/>
+    <filter id="shadow" x="-20%" y="-25%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000610" flood-opacity="0.42"/>
     </filter>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="12" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-    <marker id="arrowCyan" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M0 0L10 5L0 10Z" fill="#41d9d3"/>
+    <marker id="cyanArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L10 5L0 10Z" fill="#46ddd8"/>
     </marker>
-    <marker id="arrowPurple" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M0 0L10 5L0 10Z" fill="#9b8cff"/>
+    <marker id="violetArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L10 5L0 10Z" fill="#9a8cff"/>
     </marker>
-    <marker id="arrowAmber" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M0 0L10 5L0 10Z" fill="#ffc96b"/>
+    <marker id="amberArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L10 5L0 10Z" fill="#ffc968"/>
     </marker>
     <style>
       .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      .title { font-size: 40px; font-weight: 750; letter-spacing: -0.8px; fill: #f6f8ff; }
+      .hero { font-size: 40px; font-weight: 760; letter-spacing: -0.8px; fill: #f6f8ff; }
       .subtitle { font-size: 18px; font-weight: 450; fill: #9eabc2; }
-      .panel-title { font-size: 17px; font-weight: 750; letter-spacing: 1.8px; }
-      .card-title { font-size: 20px; font-weight: 700; fill: #f7f9ff; }
-      .body { font-size: 15px; font-weight: 450; fill: #aebbd0; }
-      .small { font-size: 13px; font-weight: 550; fill: #aebbd0; }
-      .chip { font-size: 12px; font-weight: 700; letter-spacing: 0.5px; }
-      .agent-arrow { fill: none; stroke: #41d9d3; stroke-width: 3; marker-end: url(#arrowCyan); }
-      .eval-arrow { fill: none; stroke: #9b8cff; stroke-width: 3; marker-end: url(#arrowPurple); }
-      .guard-arrow { fill: none; stroke: #ffc96b; stroke-width: 3; marker-end: url(#arrowAmber); }
+      .lane-title { font-size: 16px; font-weight: 760; letter-spacing: 1.8px; }
+      .card-title { font-size: 19px; font-weight: 700; fill: #f7f9ff; }
+      .body { font-size: 14px; font-weight: 450; fill: #afbdd2; }
+      .label { font-size: 13px; font-weight: 650; }
+      .chip { font-size: 12px; font-weight: 720; letter-spacing: 0.4px; }
+      .cyan-line { fill: none; stroke: #46ddd8; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; marker-end: url(#cyanArrow); }
+      .violet-line { fill: none; stroke: #9a8cff; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; marker-end: url(#violetArrow); }
+      .amber-line { fill: none; stroke: #ffc968; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; marker-end: url(#amberArrow); }
     </style>
   </defs>
 
-  <rect width="1600" height="920" rx="28" fill="url(#bg)"/>
-  <circle cx="1510" cy="70" r="190" fill="#6f5cf5" opacity="0.08" filter="url(#glow)"/>
-  <circle cx="80" cy="850" r="210" fill="#19c9c3" opacity="0.06" filter="url(#glow)"/>
+  <rect width="1600" height="980" rx="28" fill="url(#background)"/>
 
   <g class="sans">
-    <text x="64" y="70" class="title">OpenRQGM · Agent–Evaluator Co-Evolution</text>
-    <text x="64" y="104" class="subtitle">A public, auditable implementation of the RQGM Algorithm 1 control flow</text>
+    <text x="56" y="66" class="hero">OpenRQGM · Controlled Co-Evolution</text>
+    <text x="56" y="100" class="subtitle">Agents improve inside fixed evaluator epochs; evaluators change only at guarded checkpoints</text>
 
-    <rect x="60" y="142" width="940" height="610" rx="24" fill="url(#agentPanel)" stroke="#1d4660" stroke-width="1.5" filter="url(#shadow)"/>
-    <rect x="1024" y="142" width="516" height="610" rx="24" fill="url(#evalPanel)" stroke="#40336e" stroke-width="1.5" filter="url(#shadow)"/>
+    <!-- Lane backgrounds -->
+    <rect x="50" y="132" width="1500" height="426" rx="24" fill="url(#agentLane)" stroke="#1b4a60" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="50" y="590" width="1500" height="330" rx="24" fill="url(#evaluatorLane)" stroke="#43366f" stroke-width="1.5" filter="url(#shadow)"/>
 
-    <circle cx="88" cy="181" r="6" fill="#41d9d3"/>
-    <text x="106" y="187" class="panel-title" fill="#65e5df">AGENT EVOLUTION</text>
-    <circle cx="1052" cy="181" r="6" fill="#9b8cff"/>
-    <text x="1070" y="187" class="panel-title" fill="#b3a8ff">EVALUATOR EVOLUTION</text>
+    <circle cx="80" cy="169" r="6" fill="#46ddd8"/>
+    <text x="98" y="175" class="lane-title" fill="#68e9e4">AGENT SEARCH · WITHIN AN EPOCH</text>
+    <circle cx="80" cy="627" r="6" fill="#9a8cff"/>
+    <text x="98" y="633" class="lane-title" fill="#b5aaff">EVALUATOR CHECKPOINT · BETWEEN EPOCHS</text>
 
-    <!-- Agent loop -->
-    <rect x="96" y="250" width="188" height="108" rx="16" fill="#101e33" stroke="#2c5367"/>
-    <text x="120" y="284" class="card-title">Seed workspace</text>
-    <text x="120" y="312" class="body">Multi-role agent</text>
-    <text x="120" y="335" class="body">codebase + tools</text>
+    <!-- Upper lane cards -->
+    <rect x="88" y="268" width="190" height="104" rx="16" fill="#101e33" stroke="#2c5368"/>
+    <text x="112" y="302" class="card-title">Seed workspace</text>
+    <text x="112" y="330" class="body">Multi-role agents</text>
+    <text x="112" y="352" class="body">Shared editable codebase</text>
 
-    <rect x="350" y="224" width="310" height="312" rx="22" fill="url(#archiveCard)" stroke="#32aeb1" stroke-width="1.6" filter="url(#shadow)"/>
-    <text x="382" y="265" class="card-title">Tree archive</text>
-    <text x="382" y="292" class="body">Editable workspace lineage</text>
+    <rect x="338" y="228" width="242" height="184" rx="19" fill="#123246" stroke="#33adb1" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="364" y="263" class="card-title">Tree archive</text>
+    <text x="364" y="287" class="body">Workspace lineage + utility</text>
+    <path d="M459 315V340M459 340L410 372M459 340L459 372M459 340L508 372" fill="none" stroke="#56dfda" stroke-width="2.3"/>
+    <circle cx="459" cy="304" r="13" fill="#46ddd8"/>
+    <circle cx="410" cy="383" r="11" fill="#203f59" stroke="#6ce8e3" stroke-width="2"/>
+    <circle cx="459" cy="383" r="11" fill="#203f59" stroke="#6ce8e3" stroke-width="2"/>
+    <circle cx="508" cy="383" r="11" fill="#203f59" stroke="#6ce8e3" stroke-width="2"/>
 
-    <path d="M505 330V365M505 365L440 414M505 365L505 414M505 365L570 414" stroke="#55dcd5" stroke-width="2.4" fill="none"/>
-    <circle cx="505" cy="318" r="15" fill="#41d9d3"/>
-    <circle cx="440" cy="426" r="13" fill="#294b67" stroke="#69e5df" stroke-width="2"/>
-    <circle cx="505" cy="426" r="13" fill="#294b67" stroke="#69e5df" stroke-width="2"/>
-    <circle cx="570" cy="426" r="13" fill="#294b67" stroke="#69e5df" stroke-width="2"/>
-    <path d="M440 440L414 474M440 440L466 474M570 440L544 474M570 440L596 474" stroke="#3d7e91" stroke-width="2"/>
-    <circle cx="414" cy="484" r="10" fill="#203f59"/>
-    <circle cx="466" cy="484" r="10" fill="#203f59"/>
-    <circle cx="544" cy="484" r="10" fill="#203f59"/>
-    <circle cx="596" cy="484" r="10" fill="#203f59"/>
+    <!-- UCB-Air decision -->
+    <path d="M670 252L736 320L670 388L604 320Z" fill="#123849" stroke="#46ddd8" stroke-width="1.8" filter="url(#shadow)"/>
+    <text x="670" y="315" class="card-title" text-anchor="middle">UCB-Air</text>
+    <text x="670" y="339" class="body" text-anchor="middle">search gate</text>
 
-    <rect x="382" y="505" width="112" height="24" rx="12" fill="#173e4b"/>
-    <text x="438" y="522" class="chip" fill="#70e8e2" text-anchor="middle">UCB-AIR</text>
-    <rect x="504" y="505" width="126" height="24" rx="12" fill="#173e4b"/>
-    <text x="567" y="522" class="chip" fill="#70e8e2" text-anchor="middle">CMP SELECT</text>
+    <rect x="782" y="184" width="226" height="104" rx="16" fill="#101e33" stroke="#2c5368"/>
+    <text x="808" y="219" class="card-title">Meta-agent edit</text>
+    <text x="808" y="247" class="body">CMP-select parent</text>
+    <text x="808" y="269" class="body">Create a child workspace</text>
 
-    <rect x="728" y="240" width="222" height="116" rx="16" fill="#101e33" stroke="#2c5367"/>
-    <text x="754" y="276" class="card-title">Meta-agent edit</text>
-    <text x="754" y="305" class="body">Modify any part of the</text>
-    <text x="754" y="328" class="body">agent workspace</text>
+    <rect x="1048" y="184" width="300" height="104" rx="18" fill="url(#endpoint)" filter="url(#shadow)"/>
+    <text x="1198" y="222" class="card-title" text-anchor="middle">Selected endpoints</text>
+    <text x="1198" y="252" class="body" fill="#eefeff" text-anchor="middle">Generalist · per-role specialists</text>
+    <rect x="1138" y="260" width="120" height="20" rx="10" fill="#16264b" opacity="0.72"/>
+    <text x="1198" y="274" class="chip" fill="#dce9ff" text-anchor="middle">BEST-BELIEF</text>
 
-    <rect x="728" y="430" width="222" height="132" rx="16" fill="#101e33" stroke="#2c5367"/>
-    <text x="754" y="466" class="card-title">Validation</text>
-    <text x="754" y="495" class="body">Role-first · task-second</text>
-    <text x="754" y="518" class="body">Fixed or learned cell</text>
-    <rect x="754" y="532" width="152" height="23" rx="11.5" fill="#173e4b"/>
-    <text x="830" y="548" class="chip" fill="#70e8e2" text-anchor="middle">BINARY OUTCOME</text>
+    <rect x="1048" y="354" width="226" height="120" rx="16" fill="#101e33" stroke="#2c5368"/>
+    <text x="1074" y="389" class="card-title">Validation</text>
+    <text x="1074" y="417" class="body">CMP-select node</text>
+    <text x="1074" y="439" class="body">Balance role, then task</text>
+    <rect x="1074" y="447" width="150" height="20" rx="10" fill="#15434d"/>
+    <text x="1149" y="461" class="chip" fill="#70e9e3" text-anchor="middle">BINARY OUTCOME</text>
 
-    <rect x="728" y="624" width="222" height="78" rx="16" fill="#101e33" stroke="#2c5367"/>
-    <text x="754" y="657" class="card-title">Cached evidence</text>
-    <text x="754" y="682" class="body">Epoch-stamped records</text>
+    <rect x="1320" y="354" width="188" height="120" rx="16" fill="#101e33" stroke="#2c5368"/>
+    <text x="1346" y="389" class="card-title">Evidence cache</text>
+    <text x="1346" y="417" class="body">Artifacts + outcomes</text>
+    <text x="1346" y="439" class="body">Stamped by epoch</text>
 
-    <path d="M284 304H336" class="agent-arrow"/>
-    <path d="M660 282H714" class="agent-arrow"/>
-    <path d="M839 356V416" class="agent-arrow"/>
-    <path d="M728 488H677" class="agent-arrow"/>
-    <path d="M839 562V610" class="agent-arrow"/>
-    <path d="M728 663H650C620 663 605 642 605 612V552" class="agent-arrow"/>
-    <path d="M728 264C700 201 637 188 566 211" class="agent-arrow"/>
-    <text x="679" y="208" class="small" fill="#70e8e2" text-anchor="middle">new child</text>
+    <!-- Upper lane connections: dedicated, non-crossing routes -->
+    <path d="M278 320H324" class="cyan-line"/>
+    <path d="M580 320H590" class="cyan-line"/>
+    <path d="M712 276L768 239" class="cyan-line"/>
+    <text x="733" y="246" class="label" fill="#75eae5">expand</text>
+    <path d="M895 184V157H459V214" class="cyan-line"/>
+    <text x="680" y="151" class="label" fill="#75eae5" text-anchor="middle">add child to archive</text>
+    <path d="M718 361L1034 408" class="cyan-line"/>
+    <text x="842" y="374" class="label" fill="#75eae5">measure</text>
+    <path d="M736 320H1024V236H1034" class="cyan-line"/>
+    <text x="876" y="311" class="label" fill="#75eae5" text-anchor="middle">budget exhausted</text>
+    <path d="M1274 414H1306" class="cyan-line"/>
 
-    <!-- Evaluator loop -->
-    <rect x="1062" y="236" width="204" height="112" rx="16" fill="#171a35" stroke="#574889"/>
-    <text x="1088" y="271" class="card-title">Evaluator slots</text>
-    <text x="1088" y="300" class="body">Frozen incumbent</text>
-    <text x="1088" y="323" class="body">+ explicit epoch</text>
+    <!-- Lower lane inputs -->
+    <rect x="90" y="660" width="236" height="100" rx="16" fill="#171a35" stroke="#594b8b"/>
+    <text x="116" y="695" class="card-title">Challengers</text>
+    <text x="116" y="723" class="body">Candidates proposed from</text>
+    <text x="116" y="745" class="body">the current archive</text>
 
-    <rect x="1300" y="236" width="204" height="112" rx="16" fill="#171a35" stroke="#574889"/>
-    <text x="1326" y="271" class="card-title">Challengers</text>
-    <text x="1326" y="300" class="body">Proposed from the</text>
-    <text x="1326" y="323" class="body">current archive</text>
+    <rect x="90" y="798" width="236" height="100" rx="16" fill="#292233" stroke="#a27b42"/>
+    <circle cx="118" cy="830" r="7" fill="#ffc968"/>
+    <text x="136" y="837" class="card-title">Private anchors</text>
+    <text x="116" y="866" class="body">Evaluator-independent</text>
+    <text x="116" y="888" class="body">domain contract</text>
 
-    <rect x="1062" y="430" width="204" height="124" rx="16" fill="#251f31" stroke="#9a7745"/>
-    <circle cx="1091" cy="461" r="8" fill="#ffc96b"/>
-    <text x="1110" y="468" class="card-title">Private anchors</text>
-    <text x="1088" y="498" class="body">Evaluator-independent</text>
-    <text x="1088" y="521" class="body">domain contract</text>
+    <rect x="412" y="690" width="250" height="170" rx="18" fill="#171a35" stroke="#6959a8" stroke-width="1.4" filter="url(#shadow)"/>
+    <text x="440" y="731" class="card-title">Replacement decision</text>
+    <text x="440" y="763" class="body">Score incumbent + challengers</text>
+    <text x="440" y="787" class="body">on the same private anchors</text>
+    <rect x="440" y="809" width="194" height="26" rx="13" fill="#2a2550"/>
+    <text x="537" y="827" class="chip" fill="#b9afff" text-anchor="middle">EPSILON-BEST-BELIEF</text>
 
-    <rect x="1300" y="430" width="204" height="124" rx="16" fill="#171a35" stroke="#574889"/>
-    <text x="1326" y="465" class="card-title">Replacement</text>
-    <text x="1326" y="494" class="body">Epsilon-best-belief</text>
-    <text x="1326" y="517" class="body">Incumbent wins ties</text>
+    <rect x="736" y="720" width="236" height="110" rx="17" fill="#171a35" stroke="#6959a8"/>
+    <text x="762" y="757" class="card-title">Atomic transition</text>
+    <text x="762" y="786" class="body">Commit all winning slots</text>
+    <text x="762" y="808" class="body">Advance the epoch vector</text>
 
-    <rect x="1180" y="624" width="254" height="78" rx="16" fill="#201b3b" stroke="#6e5fc5"/>
-    <text x="1206" y="657" class="card-title">Atomic transition</text>
-    <text x="1206" y="682" class="body">Replace slots · advance epoch</text>
+    <rect x="1048" y="660" width="226" height="100" rx="16" fill="#171a35" stroke="#6959a8"/>
+    <text x="1074" y="695" class="card-title">Evaluator slots</text>
+    <text x="1074" y="723" class="body">Freeze incumbents for</text>
+    <text x="1074" y="745" class="body">the next search epoch</text>
 
-    <path d="M1266 292H1286" class="eval-arrow"/>
-    <path d="M1402 348V416" class="eval-arrow"/>
-    <path d="M1266 492H1286" class="guard-arrow"/>
-    <path d="M1402 554V594C1402 610 1390 624 1374 624" class="eval-arrow"/>
-    <path d="M1180 663H1138C1092 663 1072 632 1072 592V362" class="eval-arrow"/>
+    <rect x="1320" y="798" width="188" height="100" rx="16" fill="#292233" stroke="#a27b42"/>
+    <text x="1344" y="833" class="card-title">Selective erasure</text>
+    <text x="1344" y="861" class="body">Invalidate affected</text>
+    <text x="1344" y="883" class="body">records only</text>
 
-    <!-- Coupling between loops -->
-    <path d="M1062 320C1014 342 1010 488 964 488" class="eval-arrow"/>
-    <text x="999" y="474" class="small" fill="#b3a8ff" text-anchor="middle">frozen cell</text>
-    <path d="M660 250C855 154 1128 170 1286 250" class="eval-arrow"/>
-    <text x="1080" y="202" class="small" fill="#b3a8ff" text-anchor="middle">archive context</text>
-    <path d="M1180 683C1100 732 1016 728 950 681" class="guard-arrow"/>
-    <text x="1067" y="733" class="small" fill="#ffd68b" text-anchor="middle">selectively erase affected cache only</text>
+    <!-- Lower lane connections: no shared tracks, no crossings -->
+    <path d="M326 710H370V735H398" class="violet-line"/>
+    <path d="M326 848H370V815H398" class="amber-line"/>
+    <path d="M662 775H722" class="violet-line"/>
+    <path d="M972 749L1034 711" class="violet-line"/>
+    <path d="M972 800L1306 848" class="amber-line"/>
 
-    <!-- Endpoints -->
-    <path d="M505 536V784" class="agent-arrow"/>
-    <rect x="294" y="786" width="422" height="82" rx="20" fill="url(#endpoint)" filter="url(#shadow)"/>
-    <text x="505" y="821" class="card-title" text-anchor="middle">Selected endpoints</text>
-    <text x="505" y="849" class="body" fill="#eefeff" text-anchor="middle">Balanced generalist · per-role specialists</text>
+    <!-- Exactly two cross-lane couplings; both are vertical -->
+    <path d="M1161 660V488" class="violet-line"/>
+    <text x="1175" y="574" class="label" fill="#b8afff">frozen evaluator</text>
+    <path d="M1414 798V488" class="amber-line"/>
+    <text x="1428" y="574" class="label" fill="#ffd58a">invalidate cache</text>
 
-    <rect x="1062" y="786" width="442" height="82" rx="20" fill="#121a31" stroke="#3b4262"/>
-    <text x="1090" y="820" class="card-title">Auditable state</text>
-    <text x="1090" y="848" class="body">Archive · epochs · outcomes · checkpoint events</text>
+    <text x="800" y="950" class="subtitle" text-anchor="middle">Fixed utility within each epoch · guarded utility transitions at checkpoints</text>
   </g>
 </svg>
